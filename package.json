@@ -1,0 +1,25 @@
+{
+  "name": "round-trip",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive system design course: theory, labs and a scaling game, in English and Bengali.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/preview.mjs",
+    "lint": "eslint js",
+    "test": "node tests/engine.test.js && node tests/game.test.js && node tests/models.test.js",
+    "test:e2e": "node tests/e2e.js",
+    "test:a11y": "node tests/audit.js",
+    "test:bn": "node tests/coverage.js",
+    "test:dist": "npm run build && node tests/dist.js"
+  },
+  "devDependencies": {
+    "axe-core": "^4.10.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "puppeteer-core": "^24.0.0"
+  }
+}
