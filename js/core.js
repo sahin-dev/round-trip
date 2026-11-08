@@ -80,25 +80,104 @@ window.RT = (function () {
 
   /* ---------- speed ---------- */
   let speed = settings.speed;
-  const ms = (v) => (v / speed) * (isReduced() ? .25 : 1);
+  /* Durations are in simulated milliseconds: the clock applies the speed, reduced motion shortens them. */
+  const ms = (v) => v * (isReduced() ? .25 : 1);
+
+  /* ---------- animation clocks ----------
+     Every animation reads simulated time from a clock instead of the wall clock, so it can be paused,
+     nudged forward and slowed down. Time runs at the chosen speed while playing and stands still while
+     paused. One frame loop serves every clock, and sleeps only when nothing is scheduled. */
+  const clocks = new Set();
+  let driving = false;
+  function drive() {
+    if (driving) return;
+    driving = true;
+    const tick = () => {
+      let busy = false;
+      clocks.forEach((c) => { if (c.service()) busy = true; });
+      if (busy) requestAnimationFrame(tick); else driving = false;
+    };
+    requestAnimationFrame(tick);
+  }
+  function Clock() {
+    let base = 0, realBase = performance.now(), paused = false, stopAt = null, seq = 0;
+    const timers = [], frames = new Set(), subs = new Set();
+    const raw = () => (paused ? base : base + (performance.now() - realBase) * speed);
+    const c = {
+      now() { const t = raw(); return stopAt != null ? Math.min(t, stopAt) : t; },
+      get paused() { return paused; },
+      /* Run fn once, t simulated ms from now. Returns a cancel function. */
+      after(t, fn) {
+        const at = c.now() + Math.max(0, t), id = ++seq;
+        let i = timers.length;
+        while (i > 0 && timers[i - 1].at > at) i--;
+        timers.splice(i, 0, { at, fn, id });
+        drive();
+        return () => { const k = timers.findIndex((x) => x.id === id); if (k >= 0) timers.splice(k, 1); };
+      },
+      /* fn(now, dt) runs every frame while time moves. Returns a stop function. */
+      frame(fn) { const f = { fn, last: c.now() }; frames.add(f); drive(); return () => frames.delete(f); },
+      service() {
+        if (stopAt != null && raw() >= stopAt) { base = stopAt; paused = true; stopAt = null; c.emit(); }
+        const now = c.now();
+        while (timers.length && timers[0].at <= now) { const x = timers.shift(); try { x.fn(); } catch (e) { if (window.console) console.error(e); } }
+        frames.forEach((f) => { const dt = now - f.last; if (dt <= 0 && f.ran) return; f.last = now; f.ran = true; try { f.fn(now, dt); } catch (e) { frames.delete(f); if (window.console) console.error(e); } });
+        return !paused && !!(timers.length || frames.size);
+      },
+      rebase() { base = raw(); realBase = performance.now(); },
+      pause() { if (paused) return; base = raw(); paused = true; stopAt = null; c.emit(); },
+      play() { if (!paused && stopAt == null) return; if (paused) { realBase = performance.now(); paused = false; } stopAt = null; drive(); c.emit(); },
+      toggle() { if (paused) c.play(); else c.pause(); },
+      /* Move time forward by t simulated ms, smoothly, then stop again. */
+      step(t) { const from = c.now(); if (!paused) c.pause(); base = from; realBase = performance.now(); paused = false; stopAt = from + (t || 250); drive(); c.emit(); },
+      clear() { timers.length = 0; frames.clear(); },
+      on(fn) { subs.add(fn); return () => subs.delete(fn); },
+      emit() { subs.forEach((f) => f(c)); },
+      dispose() { c.clear(); subs.clear(); clocks.delete(c); },
+    };
+    clocks.add(c);
+    return c;
+  }
+  const clock = Clock();
+  /* A hidden tab stops animating, and picks up where it was when it returns. */
+  let hiddenPaused = false;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { if (!clock.paused) { clock.pause(); hiddenPaused = true; } }
+    else if (hiddenPaused) { hiddenPaused = false; clock.play(); }
+  });
+  clock.on(() => document.documentElement.classList.toggle('rt-paused', clock.paused));
 
   /* ---------- lab runtime ---------- */
-  function makeCtx(def, sideEls) {
+  function makeCtx(def, sideEls, clk) {
     let alive = true;
-    const timers = new Set(), rafs = new Set(), off = [];
+    const cl = clk || clock, cancels = new Set(), off = [];
+    const later = (t, fn) => { const stop = cl.after(t, () => { cancels.delete(stop); if (alive) fn(); }); cancels.add(stop); return stop; };
     const ctx = {
       def,
+      clock: cl,
       alive: () => alive,
       ms,
+      now: () => cl.now(),
       /* A sleep that never resolves once the lab is left, so async flows just stop. */
-      sleep(t) { return new Promise((res) => { if (!alive) return; const id = setTimeout(() => { timers.delete(id); if (alive) res(); }, ms(t)); timers.add(id); }); },
-      every(t, fn) { const id = setInterval(() => { if (alive) fn(); }, t); timers.add({ iv: id }); return () => clearInterval(id); },
-      after(t, fn) { const id = setTimeout(() => { if (alive) fn(); }, ms(t)); timers.add(id); },
+      sleep(t) { return new Promise((res) => { if (alive) later(ms(t), res); }); },
+      /* Repeats on simulated time, so pausing stops it and a faster speed runs it faster. */
+      every(t, fn) {
+        let on = true, stop = null;
+        const run = () => { stop = later(t, () => { if (!on) return; fn(); run(); }); };
+        run();
+        return () => { on = false; if (stop) stop(); };
+      },
+      after(t, fn) { later(ms(t), fn); },
+      /* fn(now, dt) every frame of simulated time; stops when the lab is left. */
+      frame(fn) {
+        const stop = cl.frame((now, dt) => { if (alive) fn(now, dt); });
+        cancels.add(stop);
+        return () => { stop(); cancels.delete(stop); };
+      },
       loop(fn) {
-        let last = performance.now(), stop = false, id;
-        const tick = (now) => { if (!alive || stop) return; const dt = Math.min(.05, (now - last) / 1000) * speed; last = now; fn(dt, now); id = requestAnimationFrame(tick); rafs.add(id); };
-        id = requestAnimationFrame(tick); rafs.add(id);
-        return () => { stop = true; };
+        const stop = cl.frame((now, dt) => { if (alive) fn(Math.min(.05 * speed, dt / 1000), now); });
+        cancels.add(stop);
+        return () => { stop(); cancels.delete(stop); };
       },
       onDispose(fn) { off.push(fn); },
       mission(id) {
@@ -130,9 +209,9 @@ window.RT = (function () {
         };
       },
       dispose() {
+        if (!alive) return;
         alive = false;
-        timers.forEach((t) => (t && t.iv ? clearInterval(t.iv) : clearTimeout(t)));
-        rafs.forEach((r) => cancelAnimationFrame(r));
+        cancels.forEach((f) => f()); cancels.clear();
         off.forEach((f) => f());
       },
     };
@@ -258,43 +337,89 @@ window.RT = (function () {
       label(id, t) { nodes[id].t.textContent = t; },
       sub(id, t) { nodes[id].u.textContent = t; },
       flash(id, cls, t) { api.state(id, cls); ctx.after(t || 450, () => api.state(id, '')); },
-      /* Move a packet from a to b. Resolves true when it lands, false if it was clicked away. */
+      /* A ring that spreads out from a node, to show that something arrived. */
+      ripple(id, color) {
+        const n = nodes[id];
+        if (!n || isReduced()) return;
+        const r = s('rect', { class: 'ripple c-' + (color || 'req'), x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h, rx: 7 });
+        gBack.append(r);
+        const t0 = clockOf(ctx).now();
+        const stop = frameOf(ctx)((now) => {
+          const t = clamp((now - t0) / 420, 0, 1), d = 2 + t * 10;
+          r.setAttribute('x', n.x - n.w / 2 - d); r.setAttribute('y', n.y - n.h / 2 - d);
+          r.setAttribute('width', n.w + d * 2); r.setAttribute('height', n.h + d * 2);
+          r.setAttribute('opacity', (1 - t) * .4);
+          if (t >= 1) { stop(); r.remove(); }
+        });
+      },
+      /* Move a packet from a to b. Resolves true when it lands, false if it was clicked away.
+         Packets glide at a steady pace with a short trail. On a drawn link, requests and replies keep to
+         their own lane and the wire lights up in the packet's colour while it is in use. */
       send(a, b, p) {
         const A = nodes[a] || a, B = nodes[b] || b, opt = p || {};
-        const label = opt.label || '';
-        const g = s('g', { class: 'pkt c-' + (opt.color || 'req') + (opt.onDrop ? ' drop' : '') });
+        const label = opt.label || '', color = opt.color || 'req', fx = !isReduced();
+        const wire = typeof a === 'string' && typeof b === 'string' ? links[key(a, b)] : null;
+        const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+        const lane = wire ? (a < b ? 4 : -4) : 0, ox = -uy * lane, oy = ux * lane;
+        const g = s('g', { class: 'pkt c-' + color + (opt.onDrop ? ' drop' : '') });
         if (label) {
           const tw = label.length * 6.5 + 12;
           g.append(s('rect', { x: -tw / 2, y: -19, width: tw, height: 16, rx: 3 }), s('text', { y: -7 }, label));
         }
         g.append(s('circle', { r: opt.r || 6 }));
+        const trail = fx ? s('line', { class: 'pkt-trail c-' + color }) : null;
+        const flow = fx && wire ? s('line', { class: 'lnk-flow c-' + color, x1: A.x + ox, y1: A.y + oy, x2: B.x + ox, y2: B.y + oy }) : null;
+        if (flow) gL.append(flow);
+        if (trail) gP.append(trail);
         gP.append(g);
-        const dur = ms(opt.dur || 700);
+        const cl = clockOf(ctx), dur = Math.max(1, ms(opt.dur || 700));
+        const tidy = () => { g.remove(); if (trail) trail.remove(); if (flow) flow.remove(); };
         return new Promise((res) => {
-          let dropped = false;
-          if (opt.onDrop) g.addEventListener('click', () => { dropped = true; });
-          const t0 = performance.now();
-          const tick = (now) => {
-            if (!ctx.alive()) { g.remove(); return; }
-            const t = clamp((now - t0) / dur, 0, 1), e = opt.linear ? t : ease(t);
-            g.setAttribute('transform', `translate(${lerp(A.x, B.x, e)},${lerp(A.y, B.y, e)})`);
-            if (dropped) {
-              g.remove(); if (opt.onDrop) opt.onDrop(); res(false); return;
+          let dropped = false, done = false;
+          if (opt.onDrop) g.addEventListener('click', () => { dropped = true; if (cl.paused) { finish(false); tidy(); opt.onDrop(); } });
+          const t0 = cl.now();
+          const finish = (v) => { if (done) return; done = true; stop(); res(v); };
+          const place = (e) => {
+            const x = lerp(A.x, B.x, e) + ox, y = lerp(A.y, B.y, e) + oy;
+            g.setAttribute('transform', `translate(${x},${y})`);
+            if (trail) {
+              const back = Math.min(26, e * len);
+              trail.setAttribute('x1', x - ux * back); trail.setAttribute('y1', y - uy * back);
+              trail.setAttribute('x2', x); trail.setAttribute('y2', y);
             }
-            if (opt.dropAt != null && t >= opt.dropAt) {
-              g.setAttribute('class', 'pkt c-bad');
-              ctx.after(260, () => g.remove());
-              res(false); return;
-            }
-            if (t >= 1) { g.remove(); res(true); return; }
-            requestAnimationFrame(tick);
           };
-          requestAnimationFrame(tick);
+          place(0);
+          const stop = frameOf(ctx)((now) => {
+            if (done) return;
+            const t = clamp((now - t0) / dur, 0, 1), e = opt.linear ? t : glide(t);
+            place(e);
+            if (dropped) { tidy(); if (opt.onDrop) opt.onDrop(); finish(false); return; }
+            if (opt.dropAt != null && t >= opt.dropAt) {
+              finish(false);
+              g.setAttribute('class', 'pkt c-bad'); if (flow) flow.remove();
+              if (trail) trail.remove();
+              if (!fx) { ctx.after(260, () => g.remove()); return; }
+              /* A lost packet tumbles off the wire and fades, so the loss is easy to spot. */
+              const x0 = lerp(A.x, B.x, e) + ox, y0 = lerp(A.y, B.y, e) + oy, f0 = cl.now();
+              const fall = frameOf(ctx)((n2) => {
+                const k = clamp((n2 - f0) / 520, 0, 1);
+                g.setAttribute('transform', `translate(${x0 + k * 6},${y0 + k * k * 26}) rotate(${k * 40})`);
+                g.setAttribute('opacity', 1 - k);
+                if (k >= 1) { fall(); g.remove(); }
+              });
+              return;
+            }
+            if (t >= 1) { tidy(); if (typeof b === 'string' && !opt.quiet) api.ripple(b, color); finish(true); }
+          });
         });
       },
     };
     return api;
   }
+  /* Neither too linear nor too bouncy: quick to leave, steady in the middle, gentle to land. */
+  const glide = (t) => t - (Math.sin(2 * Math.PI * t) * .55) / (2 * Math.PI);
+  const clockOf = (ctx) => (ctx && ctx.clock) || clock;
+  const frameOf = (ctx) => (ctx && ctx.frame ? ctx.frame : (fn) => clock.frame(fn));
 
   /* ---------- Ladder: the classic protocol sequence diagram ---------- */
   function Ladder(ctx, opts) {
@@ -349,15 +474,23 @@ window.RT = (function () {
         }
         gRows.append(row);
         const myRowY = y; y += rowH; grow();
-        const dur = ms(m.dur || 620);
+        const dur = Math.max(1, ms(m.dur || 620)), cl = clockOf(ctx);
+        /* A dot rides the front of the arrow, so the eye follows the message as it travels. */
+        const head = isReduced() ? null : s('circle', { class: 'head', r: 4.5, cx: x1, cy: y1 });
+        if (head) row.append(head);
         return new Promise((res) => {
-          const t0 = performance.now();
-          const tick = (now) => {
-            if (!ctx.alive()) return;
-            const t = clamp((now - t0) / dur, 0, 1), stop = m.lost ? .6 : 1, e = Math.min(t, stop);
-            shaft.setAttribute('x2', lerp(x1, x2, e)); shaft.setAttribute('y2', lerp(y1, y2, e));
+          const t0 = cl.now();
+          let done = false;
+          const stopF = frameOf(ctx)((now) => {
+            if (done) return;
+            const t = clamp((now - t0) / dur, 0, 1), stop = m.lost ? .6 : 1, e = Math.min(glide(t), stop);
+            const hx = lerp(x1, x2, e), hy = lerp(y1, y2, e);
+            shaft.setAttribute('x2', hx); shaft.setAttribute('y2', hy);
+            if (head) { head.setAttribute('cx', hx); head.setAttribute('cy', hy); }
             if (t > .3) { bg.setAttribute('opacity', 1); lbl.setAttribute('opacity', 1); }
-            if (t >= stop) {
+            if (t >= stop || (m.lost && e >= stop)) {
+              done = true; stopF();
+              if (head) head.remove();
               if (m.lost) {
                 const cx = lerp(x1, x2, stop), cy = lerp(y1, y2, stop);
                 row.setAttribute('class', 'row c-bad');
@@ -365,11 +498,9 @@ window.RT = (function () {
                 res(false); return;
               }
               tip.setAttribute('opacity', 1); tip.setAttribute('transform', `translate(${x2},${y2}) rotate(${(Math.atan2(y2 - y1, Math.abs(x2 - x1)) * 180 / Math.PI) * dir})`);
-              res(true); return;
+              res(true);
             }
-            requestAnimationFrame(tick);
-          };
-          requestAnimationFrame(tick);
+          });
           void myRowY;
         });
       },
@@ -441,8 +572,10 @@ window.RT = (function () {
   }
   const name = (def) => (RT.labText ? RT.labText(def, 'short') : def.short || def.title);
   function setSpeed(v) {
+    clocks.forEach((c) => c.rebase());
     speed = v; settings.speed = v; saveSettings();
-    document.querySelectorAll('.speed button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.v === v)));
+    document.querySelectorAll('.speed button, .pb-speed button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.v === v)));
+    clocks.forEach((c) => c.emit());
   }
   function railGroups() {
     if (settings.rail === 'path' && RT.pathLabs) return [[RT.pathName(), RT.pathLabs()]];
@@ -462,7 +595,7 @@ window.RT = (function () {
     old.replaceWith(fresh); refreshRail();
   }
   function buildRail() {
-    const speeds = [[.25, '¼×'], [.5, '½×'], [1, '1×'], [2, '2×']];
+    const speeds = SPEEDS;
     const sp = h('div', { class: 'speed' }, h('span', null, 'Speed'), speeds.map(([v, t]) => {
       const b = h('button', { 'aria-pressed': String(v === speed), onclick() { setSpeed(v); } }, t);
       b.dataset.v = v;
@@ -493,6 +626,56 @@ window.RT = (function () {
     } }, text));
     return ui.card('Check yourself', h('div', { class: 'quiz' }, h('p', null, c.q), opts, why));
   };
+  /* ---------- playback controls ---------- */
+  const ICONS = {
+    play: 'M5 3.5v13l11-6.5z', pause: 'M5 3.5h3.6v13H5zM11.4 3.5H15v13h-3.6z', step: 'M4 3.5v13l9-6.5zM14 3.5h2.6v13H14z',
+    back: 'M16 3.5v13L7 10zM4 3.5h2.6v13H4z', reset: 'M10 3a7 7 0 1 1-6.6 4.7l2 .7A4.9 4.9 0 1 0 10 5.1V8L5.6 4.3 10 .6z',
+  };
+  const icon = (k) => s('svg', { class: 'pb-ico', viewBox: '0 0 20 20', 'aria-hidden': 'true', focusable: 'false' }, s('path', { d: ICONS[k] }));
+  const SPEEDS = [[.25, '¼×'], [.5, '½×'], [1, '1×'], [2, '2×'], [4, '4×']];
+  const bnSay = (en, b) => (settings.lang === 'bn' ? b : en);
+  /* Play, pause, step, reset and speed for anything that runs on a clock. opts: { clock, onReset, onStep, time } */
+  function playbar(o) {
+    const cl = o.clock || clock;
+    const pp = h('button', { class: 'pb-btn pb-main', id: o.id ? o.id + '-play' : null, onclick() { cl.toggle(); } });
+    const step = h('button', { class: 'pb-btn', id: o.id ? o.id + '-step' : null, title: bnSay('Pause and move forward a moment (.)', 'থামিয়ে একটু এগিয়ে যান (.)'), onclick() { if (o.onStep) o.onStep(); else cl.step(o.stepMs || 300); } }, icon('step'), h('span', null, bnSay('Step', 'এক ধাপ')));
+    const reset = o.onReset && h('button', { class: 'pb-btn', id: o.id ? o.id + '-reset' : null, title: bnSay('Start this again from the beginning (R)', 'একদম শুরু থেকে আবার (R)'), onclick: o.onReset }, icon('reset'), h('span', null, bnSay('Reset', 'রিসেট')));
+    const sp = h('div', { class: 'pb-speed', role: 'group', 'aria-label': bnSay('Speed', 'গতি') }, SPEEDS.map(([v, t]) => {
+      const b = h('button', { 'aria-pressed': String(v === speed), title: bnSay('Speed ', 'গতি ') + t, onclick() { setSpeed(v); } }, t);
+      b.dataset.v = v; return b;
+    }));
+    const dot = h('span', { class: 'pb-dot', 'aria-hidden': 'true' }), status = h('span', { class: 'pb-status', role: 'status' }), time = h('span', { class: 'pb-time mono' });
+    const el = h('div', { class: 'playbar', role: 'toolbar', 'aria-label': bnSay('Animation controls', 'অ্যানিমেশন নিয়ন্ত্রণ') },
+      h('div', { class: 'pb-group' }, pp, step, reset),
+      h('div', { class: 'pb-group' }, h('span', { class: 'pb-lbl' }, bnSay('Speed', 'গতি')), sp),
+      h('div', { class: 'pb-group pb-state' }, dot, status, time));
+    const t0 = cl.now();
+    const paint = () => {
+      const p = cl.paused;
+      pp.textContent = ''; pp.append(icon(p ? 'play' : 'pause'), h('span', null, p ? bnSay('Play', 'চালান') : bnSay('Pause', 'থামান')));
+      pp.setAttribute('aria-pressed', String(!p)); pp.title = p ? bnSay('Carry on (Space or K)', 'আবার চালান (Space বা K)') : bnSay('Freeze everything (Space or K)', 'সব থামিয়ে রাখুন (Space বা K)');
+      el.classList.toggle('is-paused', p);
+      status.textContent = p ? bnSay('Paused', 'থেমে আছে') : bnSay('Running', 'চলছে') + ' · ' + (SPEEDS.find((x) => x[0] === speed) || [0, speed + '×'])[1];
+      if (o.time !== false) time.textContent = bnSay('sim ', 'সময় ') + ((cl.now() - t0) / 1000).toFixed(1) + ' s';
+    };
+    const off = cl.on(paint);
+    const iv = o.time === false ? 0 : setInterval(() => { if (!cl.paused) paint(); }, 200);
+    paint();
+    return { el, paint, dispose() { off(); clearInterval(iv); } };
+  }
+  /* Keyboard: Space or K pauses, full stop steps, R resets. Typing in a field never triggers them. */
+  let activeBar = null;
+  document.addEventListener('keydown', (e) => {
+    if (!activeBar || e.ctrlKey || e.metaKey || e.altKey || !activeBar.el.isConnected || !activeBar.el.offsetParent) return;
+    const t = e.target, tag = (t && t.tagName) || '';
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (t && t.isContentEditable) || (t && t.closest && t.closest('dialog, .scene'))) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ' && /^(BUTTON|A|SUMMARY)$/.test(tag)) return;
+    if (k === ' ' || k === 'k') { e.preventDefault(); activeBar.clock.toggle(); }
+    else if (k === '.') { e.preventDefault(); activeBar.clock.step(300); }
+    else if (k === 'r' && activeBar.reset) { e.preventDefault(); activeBar.reset(); }
+  });
+
   function renderLab(def) {
     const missionBox = h('div');
     const T = (k, fb) => (RT.labText ? RT.labText(def, k) : fb);
@@ -517,13 +700,34 @@ window.RT = (function () {
       h('h1', null, T('title', def.title)), h('p', { class: 'lede' }, T('lede', def.lede))));
     const labPane = h('div', { class: 'labgrid ' + (def.wide ? 'wide' : '') }, stage, sideEl);
     side.refresh();
-    let mounted = false;
+    let mounted = false, labCtx = null, bar = null;
+    /* Topic labs get playback controls. Reset throws the lab away and builds it again from nothing. */
+    const reset = () => {
+      if (labCtx) labCtx.dispose();
+      clock.clear(); clock.play();
+      [...stage.childNodes].forEach((n) => { if (!bar || n !== bar.el) n.remove(); });
+      mounted = false; mount();
+      toast(bnSay('Lab reset: everything is back to the start', 'ল্যাব রিসেট: সবকিছু শুরুর অবস্থায়'));
+    };
+    if (!def.plain && !def.theoryOnly && theory) {
+      bar = playbar({ id: 'pb', onReset: reset });
+      stage.append(bar.el);
+      activeBar = { el: bar.el, clock, reset };
+      /* A paused lab wakes up when you ask it to do something. */
+      stage.addEventListener('click', (e) => {
+        if (clock.paused && !e.target.closest('.playbar') && e.target.closest('button, .chip, .node.click')) clock.play();
+      }, true);
+      ctx.onDispose(() => { bar.dispose(); if (activeBar && activeBar.el === bar.el) activeBar = null; });
+    }
+    ctx.onDispose(() => { if (labCtx) labCtx.dispose(); });
     const mount = () => {
       if (mounted) return;
       mounted = true;
-      if (RT.beforeLab) RT.beforeLab(stage, def, ctx);
-      try { def.render(stage, ctx); } catch (e) { showCrash(stage, e); }
-      if (RT.afterLab) RT.afterLab(stage, def, ctx);
+      labCtx = makeCtx(def, side);
+      if (bar) bar.paint();
+      if (RT.beforeLab) RT.beforeLab(stage, def, labCtx);
+      try { def.render(stage, labCtx); } catch (e) { showCrash(stage, e); }
+      if (RT.afterLab) RT.afterLab(stage, def, labCtx);
     };
     if (def.theoryOnly) { mainEl.append(RT.renderTheory(def, null, ctx)); return; }
     if (!theory) { mainEl.append(labPane); mount(); return; }
@@ -547,6 +751,7 @@ window.RT = (function () {
   }
   function route() {
     if (current) { current.dispose(); current = null; }
+    clock.clear(); clock.play();
     mainEl.textContent = '';
     const id = location.hash.slice(1);
     if (byId[id]) {
@@ -581,6 +786,6 @@ window.RT = (function () {
     route();
   }
 
-  return { h, s, ui, clamp, lerp, ease, hash, seeded, hexOf, fmtMs, sha256, hmac, utf8, Net, Ladder, lab, labs, byId, TRACKS, start, toast, ledClass, settings, saveSettings, applySettings, setSpeed, rebuildRail, defaultAssume, reroute: route, get quiz() { return RT_quiz; },
+  return { h, s, ui, clamp, lerp, ease, glide, hash, seeded, hexOf, fmtMs, sha256, hmac, utf8, Net, Ladder, Clock, clock, now: () => clock.now(), playbar, icon, makeCtx, lab, labs, byId, TRACKS, start, toast, ledClass, settings, saveSettings, applySettings, setSpeed, rebuildRail, defaultAssume, reroute: route, get quiz() { return RT_quiz; }, get speed() { return speed; },
     get reduced() { return isReduced(); }, get progress() { return progress; }, home: null };
 })();

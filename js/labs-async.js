@@ -36,11 +36,11 @@
         gP.append(g); pk.push({ lane, dir, x: 0, g, done });
       }
       function deliver(id) {
-        const l = lanes[id], now = performance.now();
+        const l = lanes[id], now = RT.now();
         l.born.forEach((b) => { l.delaySum += now - b; l.got++; }); l.born = []; l.queue = 0;
       }
       function fire() {
-        Object.keys(lanes).forEach((id) => { lanes[id].queue++; lanes[id].born.push(performance.now()); });
+        Object.keys(lanes).forEach((id) => { lanes[id].queue++; lanes[id].born.push(RT.now()); });
         ctx.mission('event');
         ['sse', 'ws'].forEach((id) => { const l = lanes[id]; move(l, -1, 'res', 'event', () => deliver(id)); l.reqs += 0; });
         const l = lanes.long;

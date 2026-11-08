@@ -120,8 +120,8 @@
 
     render(root, ctx) {
       let busy = false, offset = 0, net = null, lastNx = null;
-      const t0 = performance.now();
-      const now = () => (performance.now() - t0) / 1000 + offset;
+      const t0 = RT.now();
+      const now = () => (RT.now() - t0) / 1000 + offset;
       const caches = { browser: new Map(), os: new Map(), resolver: new Map(), resDeleg: new Map(), osDeleg: new Map() };
 
       const input = h('input', { type: 'text', id: 'dns-name', value: 'www.example.com', 'aria-label': 'Domain name', spellcheck: 'false', autocapitalize: 'off',

@@ -39,7 +39,9 @@
     const say = (en, b) => (bn() ? b : en);
     const name = (id) => RT.labText(RT.byId[id], 'short');
     const art = h('article', { class: 'theory' });
-    const words = x.s.flatMap((v) => v[1]).join(' ').split(/\s+/).length;
+    const words = [...x.s.flatMap((v) => v[1]), ...(RT.moreText ? RT.moreText(def.id, S.lang).map((v) => v[1]) : [])].join(' ').split(/\s+/).length;
+    /* The walkthrough is built once, so redrawing at another depth keeps its place. */
+    const scene = RT.renderScene ? RT.renderScene(def.id, ctx) : null;
     const body = h('div', { class: 'theory-body' });
     const depth = S.depth || (S.level === 'new' ? 'simple' : S.level === 'pro' ? 'deep' : 'standard');
     const seg = ui.seg(say('Depth', 'গভীরতা'), [['simple', say('Simple', 'সহজ')], ['standard', say('Standard', 'সাধারণ')], ['deep', say('Deep', 'গভীর')]], depth, (v) => { S.depth = v; RT.saveSettings(); draw(v); });
@@ -53,9 +55,12 @@
       body.textContent = '';
       if (ex) body.append(h('p', { class: 'th-lead' }, ex.what), h('div', { class: 'th-pair' }, h('div', null, h('b', null, say('Think of it like', 'ভাবুন এভাবে')), ex.like), h('div', null, h('b', null, say('Why it matters', 'কেন গুরুত্বপূর্ণ')), ex.why)));
       if (pic) body.append(pic);
+      if (scene) body.append(scene);
       if (ext) body.append(box(say('A real example', 'একটি বাস্তব উদাহরণ'), 'ex', [ext.example]));
       if (level !== 'simple') x.s.forEach(([head, paras]) => { const sec = h('section', null, h('h2', null, head)), st = { list: null }; paras.forEach((p) => para(p, sec, st)); body.append(sec); });
+      if (RT.renderMore) RT.renderMore(def.id, level).slice(0, 2).forEach((el) => body.append(el));
       if (ext && level !== 'simple') body.append(box(say('Common mistakes', 'সাধারণ ভুল'), 'warn', ext.mistakes));
+      if (RT.renderMore) RT.renderMore(def.id, level).slice(2).forEach((el) => body.append(el));
       if (ext && level === 'deep') body.append(box(say('Going deeper', 'আরও গভীরে'), 'deep', ext.deep));
       if (level === 'simple') body.append(h('p', { class: 'small muted' }, say('Want more detail? Choose Standard above.', 'আরও জানতে ওপরে সাধারণ বাছুন।')));
       body.append(h('div', { class: 'th-take' }, h('b', null, say('Remember', 'মনে রাখুন')), h('ul', null, x.take.map((v) => h('li', null, v)))));
@@ -82,6 +87,8 @@
     draw(depth);
     const c = RT.checkFor(def);
     if (c) art.append(RT.quiz(c));
+    const c2 = RT.moreQuiz && RT.moreQuiz(def.id);
+    if (c2) { const q2 = RT.quiz(c2); q2.classList.add('quiz-more'); const t2 = q2.querySelector('h2'); if (t2) t2.textContent = say('One more check', 'আরেকটি যাচাই'); art.append(q2); }
     const meta = window.RTTopicMeta && window.RTTopicMeta[def.id];
     const done = ui.btn(S.read[def.id] ? say('Understood ✓', 'বুঝেছি ✓') : say('I understand this', 'আমি বুঝেছি'), (e) => { S.read[def.id] = !S.read[def.id]; RT.saveSettings(); e.target.textContent = S.read[def.id] ? say('Understood ✓', 'বুঝেছি ✓') : say('I understand this', 'আমি বুঝেছি'); RT.rebuildRail(); }, { id: 'th-done' });
     art.append(h('div', { class: 'th-end' }, goLab && ui.btn(say('Try it in the lab →', 'ল্যাবে চেষ্টা করুন →'), goLab, { kind: 'primary', id: 'go-lab' }), done));

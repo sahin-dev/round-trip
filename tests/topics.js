@@ -81,11 +81,64 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
   });
   ok(!gaps.length, 'languages match: ' + gaps.slice(0, 12));
 
+  // Every roadmap topic is complete: a walkthrough that plays, and the rounding-off sections in both languages.
+  const unfinished = await p.evaluate(() => {
+    const out = [], bnText = (v) => /[ঀ-৿]/.test(v || '');
+    RT.STAGES.flatMap((s) => s.ids).forEach((id) => {
+      const sc = RT.SCENES[id], m = RT.MORE[id];
+      if (!sc) out.push(id + ' has no walkthrough'); else RT.checkScene(sc).forEach((e) => out.push(id + ' ' + e));
+      if (!m || !m.bn) { out.push(id + ' has no extra sections'); return; }
+      ['use', 'avoid', 'gain', 'cost', 'say'].forEach((k) => {
+        const a = m.en[k] || [], b = m.bn[k] || [];
+        if (a.length < 2 || a.length !== b.length || !b.every(bnText)) out.push(id + '.' + k);
+      });
+      if (!m.en.real || !bnText(m.bn.real)) out.push(id + '.real');
+      const q = m.en.q, qb = m.bn.q;
+      if (!q || !qb || q.options.length !== qb.options.length || !(q.answer >= 0 && q.answer < q.options.length) || !bnText(qb.q + qb.why)) out.push(id + '.q');
+    });
+    return out;
+  });
+  ok(!unfinished.length, 'every topic is complete: ' + unfinished.slice(0, 12));
+
+  // Labs can be paused, nudged forward and reset, and a paused lab stands still.
+  await go('lb'); await sleep(700);
+  ok(await p.$('main .labmain > .playbar') !== null, 'a lab has playback controls');
+  await click('#pb-play'); await sleep(60);
+  const t0 = await p.evaluate(() => (RT.clock.paused ? RT.now() : -1));
+  await sleep(400);
+  ok(t0 >= 0 && (await p.evaluate(() => RT.now())) === t0, 'pause stops simulated time');
+  ok(await p.$eval('#pb-play', (e) => /Play/.test(e.textContent)), 'the button offers Play while paused');
+  await click('#pb-step'); await sleep(700);
+  ok(await p.evaluate((t) => RT.clock.paused && RT.now() > t, t0), 'step moves time forward, then stops');
+  await p.keyboard.press('k'); await sleep(60);
+  ok(!(await p.evaluate(() => RT.clock.paused)), 'the K key plays again');
+  await p.evaluate(() => document.querySelector('main .node.click').dispatchEvent(new MouseEvent('click', { bubbles: true }))); await sleep(60);
+  await click('#pb-reset'); await sleep(150);
+  ok(await p.$$eval('main .labmain > .playbar', (b) => b.length) === 1 && !(await p.$('main .node.dead')), 'reset rebuilds the lab from the start');
+  await click('#pb-play'); await sleep(40);
+  await go('dns'); await sleep(80);
+  ok(!(await p.evaluate(() => RT.clock.paused)), 'leaving a paused lab starts the next one running');
+
   // Lessons have next and previous links.
   await set({ openOn: 'theory' });
   await go('servers');
   ok(await p.$('.th-nav') !== null, 'a theory-only lesson has path links');
   ok(await p.$eval('main', (e) => /unlocks/.test(e.textContent)), 'a lesson says what it unlocks');
+
+  // The walkthrough steps forward and back, jumps to any step, and resets.
+  await go('outbox');
+  const cap = () => p.$eval('.scene .scn-num', (e) => e.textContent);
+  const sceneBtn = (label) => p.evaluate((t) => [...document.querySelectorAll('.scene .pb-btn')].find((b) => b.textContent.trim() === t).click(), label);
+  ok(await p.$$eval('.scene .scn-dot', (d) => d.length) === 5 && (await p.$$eval('.scene .scn-list li', (l) => l.length)) === 5, 'a walkthrough shows a dot and a written line per step');
+  await sceneBtn('Next'); await sleep(80);
+  ok(await cap() === '1/5', 'Next starts at step 1');
+  await p.evaluate(() => document.querySelectorAll('.scene .scn-dot')[3].click()); await sleep(80);
+  ok(await cap() === '4/5', 'a dot jumps to its step');
+  await sceneBtn('Back'); await sleep(80);
+  ok(await cap() === '3/5', 'Back goes one step back');
+  await sceneBtn('Reset'); await sleep(80);
+  ok(await cap() === '▶', 'Reset returns to the start');
+  ok((await p.$$('.theory .th-duo')).length === 2 && (await p.$('.theory .th-box.talk')) && (await p.$('.quiz-more')), 'a lesson has when-to-use, trade-offs, interview notes and a second question');
   await set({ openOn: 'lab' });
 
   // Sidebar groups collapse, and the current page's group opens by itself.

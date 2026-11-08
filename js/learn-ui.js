@@ -161,7 +161,8 @@
       const lessons = RT.labs.map((l) => {
         const t = window.RTTheory[l.id] || {}, side = (x) => (x ? x.s.flatMap(([head, paras]) => [{ head, text: paras.join(' ').replace(/(^|\s)- /g, '$1') }]) : []);
         const bn = (window.RTLabsBn || {})[l.id] || {};
-        return { l, names: [l.title, l.short, bn.title, bn.short].filter(Boolean).join(' ').toLowerCase(), ledes: [l.lede, bn.lede, l.notes].filter(Boolean).join(' ').toLowerCase(), secs: [...side(t.en), ...side(t.bn)] };
+        const more = (lang) => (RT.moreText ? RT.moreText(l.id, lang).map(([head, text]) => ({ head, text, generic: true })) : []);
+        return { l, names: [l.title, l.short, bn.title, bn.short].filter(Boolean).join(' ').toLowerCase(), ledes: [l.lede, bn.lede, l.notes].filter(Boolean).join(' ').toLowerCase(), secs: [...side(t.en), ...side(t.bn), ...more('en'), ...more('bn')] };
       });
       const clip = (text, at, len) => { const from = Math.max(0, text.lastIndexOf(' ', Math.max(0, at - 40)) + 1); return (from ? '…' : '') + text.slice(from, at + len + 60).trim() + '…'; };
       function run(q0) {
@@ -172,9 +173,9 @@
           const title = RT.labText(l, 'title'), lede = first(RT.labText(l, 'lede'));
           if (names.includes(q)) { rows.push([5, 'Lab', title, lede, l.id]); return; }
           if (ledes.includes(q)) { rows.push([2, 'Lab', title, lede, l.id]); return; }
-          const sec = secs.find((x) => x.head.toLowerCase().includes(q)) || secs.find((x) => x.text.toLowerCase().includes(q));
+          const sec = secs.find((x) => !x.generic && x.head.toLowerCase().includes(q)) || secs.find((x) => x.text.toLowerCase().includes(q));
           if (!sec) return;
-          const at = sec.text.toLowerCase().indexOf(q), inHead = sec.head.toLowerCase().includes(q);
+          const at = sec.text.toLowerCase().indexOf(q), inHead = !sec.generic && sec.head.toLowerCase().includes(q);
           rows.push([inHead ? 3 : 1, 'Lab', title, sec.head + ': ' + (at >= 0 ? clip(sec.text, at, q.length) : first(sec.text)), l.id]);
         });
         L.GLOSSARY.forEach(([term, def, lab, alts]) => { const nm = [term, ...(alts || [])].join(' ').toLowerCase(); if (nm.includes(q)) rows.push([term.toLowerCase() === q ? 4 : 2, 'Term', term, def, lab]); });

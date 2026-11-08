@@ -75,5 +75,5 @@ The site covered the fundamentals well. Against the other two sources it had thr
 
 - The Bengali text has not had a professional review. The new text matches the style of the existing text, and technical terms follow the same transliterations.
 - Capacities and latencies on the cheat sheets are orders of magnitude for reasoning.
-- The script bundle grew to about 470 KB gzipped, because nearly all content ships in it. The service worker caches it after the first visit.
+- The script bundle is about 660 KB gzipped, because nearly all content ships in it, in two languages. The walkthroughs and extra lesson sections added about 190 KB. The service worker caches it after the first visit.
 - Decision Trainer cards and Technology Guide entries were not extended for the new topics, apart from linking existing entries to them.

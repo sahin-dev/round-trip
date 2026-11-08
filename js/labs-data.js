@@ -98,14 +98,14 @@
       function repl(f, v) { const d = lag.value * (.5 + f.lag); return net.send('L', f.id, { label: 'v' + v, color: 'cache', dur: d }).then(() => { if (f.up && leaderUp) { f.v = Math.max(f.v, v); paint(); } }); }
       async function write() {
         if (!leaderUp) { banner.className = 'banner bad'; banner.textContent = 'There is no leader. Fail over first by clicking the dead leader.'; return; }
-        const t0 = performance.now(), v = ++leaderV, m = mode.value; paint();
+        const t0 = RT.now(), v = ++leaderV, m = mode.value; paint();
         await net.send('c', 'L', { label: 'v' + v, color: 'req', dur: 420 });
         const reps = F.filter((f) => f.up).map((f) => repl(f, v));
         const need = m === 'sync' ? 3 : m === 'semi' ? 1 : 0, alive = F.filter((f) => f.up).length;
         if (alive < need) { ctx.mission('block'); banner.className = 'banner bad'; banner.textContent = `Sync mode needs all 3 followers, but only ${alive} are up. This write hangs. Consistency is costing you availability.`; return; }
         if (need) { let got = 0; await new Promise((res) => reps.forEach((p) => p.then(() => { if (++got >= need) res(); }))); }
         await net.send('L', 'c', { label: 'OK', color: 'res', dur: 420 });
-        const t = Math.round(performance.now() - t0); acked++; stats.set('ack', t + ' ms'); stats.set('acked', acked);
+        const t = Math.round(RT.now() - t0); acked++; stats.set('ack', t + ' ms'); stats.set('acked', acked);
         banner.className = 'banner ok'; banner.textContent = m === 'sync' ? 'OK only after every follower confirmed. Slow, but no acknowledged data can be lost.' : m === 'semi' ? 'OK after the first follower confirmed.' : 'OK straight away. The followers will catch up later, if nothing goes wrong.';
         if (m === 'sync') ctx.mission('sync');
       }
@@ -161,13 +161,13 @@
         await net.send('u1', 'A', { label: 'write', color: 'req', dur: 420 });
         if (cut) {
           if (mode.value === 'cp') { net.flash('A', 'err'); await net.send('A', 'u1', { label: '503', color: 'bad', dur: 420 }); banner.className = 'banner bad'; banner.textContent = 'CP: Replica A can\'t confirm with B, so it refuses the write. Consistent, but unavailable.'; ctx.mission('cp'); }
-          else { a++; tsA = performance.now(); paint(); await net.send('A', 'u1', { label: 'OK', color: 'res', dur: 420 }); banner.className = 'banner warn'; banner.textContent = 'AP: Replica A accepted it locally. Available, but now the replicas disagree. Read from Client 2.'; }
+          else { a++; tsA = RT.now(); paint(); await net.send('A', 'u1', { label: 'OK', color: 'res', dur: 420 }); banner.className = 'banner warn'; banner.textContent = 'AP: Replica A accepted it locally. Available, but now the replicas disagree. Read from Client 2.'; }
         } else if (elc.value === 'ec') {
-          a++; tsA = performance.now(); paint();
+          a++; tsA = RT.now(); paint();
           await net.send('A', 'B', { label: 'sync', color: 'cache', dur: 700 }); b = a; paint(); await net.send('B', 'A', { color: 'res', dur: 500 });
           await net.send('A', 'u1', { label: 'OK', color: 'res', dur: 420 }); stats.set('lat', '120 ms'); banner.className = 'banner ok'; banner.textContent = 'EC: acknowledged after B confirmed. Consistent, but it pays a cross-region round trip on every write.'; ctx.mission('pacelc-ec');
         } else {
-          a++; tsA = performance.now(); paint(); await net.send('A', 'u1', { label: 'OK', color: 'res', dur: 420 }); stats.set('lat', '5 ms');
+          a++; tsA = RT.now(); paint(); await net.send('A', 'u1', { label: 'OK', color: 'res', dur: 420 }); stats.set('lat', '5 ms');
           net.send('A', 'B', { label: 'later', color: 'cache', dur: 1700 }).then(() => { if (!cut) { b = Math.max(a, b); paint(); } });
           banner.className = 'banner warn'; banner.textContent = 'EL: acknowledged in 5 ms. B catches up in a moment, and a read there right now would be stale. That\'s the "else" in PACELC.'; ctx.mission('pacelc');
         }

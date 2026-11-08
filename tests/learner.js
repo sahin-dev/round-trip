@@ -18,6 +18,8 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
   await p.reload({ waitUntil: 'domcontentloaded' }); await sleep(400);
 
   const ids = await p.evaluate(() => RT.labs.filter((l) => RT.hasTheory(l)).map((l) => l.id));
+  /* Roadmap topics carry the full lesson; practice tools such as the Estimator keep a shorter one. */
+  const roadmap = await p.evaluate(() => RT.STAGES.flatMap((s) => s.ids));
   console.log('topics with theory', ids.length);
   for (const lang of ['en', 'bn']) {
     await set({ lang, depth: 'deep' });
@@ -26,15 +28,18 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
       await p.evaluate((i) => { location.hash = i; }, id); await sleep(90);
       const r = await p.evaluate(() => {
         const t = document.querySelector('main .theory');
-        return t && { pic: t.querySelectorAll('.flow-box').length, boxes: t.querySelectorAll('.th-box').length, secs: t.querySelectorAll('.theory-body > section:not(.th-box)').length, text: t.innerText, heads: [...t.querySelectorAll('.th-box h2')].map((x) => x.textContent) };
+        return t && { pic: t.querySelectorAll('.flow-box').length, boxes: t.querySelectorAll('.th-box').length, secs: t.querySelectorAll('.theory-body > section:not(.th-box):not(.scene)').length, scene: t.querySelectorAll('.scene .scn-dot').length, text: t.innerText, heads: [...t.querySelectorAll('.th-box h2')].map((x) => x.textContent) };
       });
       ok(r, id + ' ' + lang + ' no theory');
       if (!r) continue;
       ok(r.pic >= 2, id + ' ' + lang + ' picture');
-      ok(r.boxes === 3, id + ' ' + lang + ' boxes ' + r.boxes);
+      /* Deep shows the example, mistakes and deeper notes, plus use/avoid, gain/cost, interview notes and where it is used. */
+      const topic = roadmap.includes(id);
+      ok(r.boxes === (topic ? 9 : 3), id + ' ' + lang + ' boxes ' + r.boxes);
+      if (topic) ok(r.scene >= 3, id + ' ' + lang + ' walkthrough');
       ok(r.secs >= 1, id + ' ' + lang + ' sections');
       ok(!/undefined|\[object|NaN/.test(r.text), id + ' ' + lang + ' junk');
-      if (lang === 'bn') ok(!/A real example|Common mistakes|Going deeper|Remember/.test(r.text), id + ' labels still English');
+      if (lang === 'bn') ok(!/A real example|Common mistakes|Going deeper|Remember|Reach for it|What you gain|Say this in|Where you will meet|Watch it work/.test(r.text), id + ' labels still English');
     }
   }
   await set({ lang: 'en', depth: 'simple' });

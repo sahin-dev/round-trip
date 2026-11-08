@@ -85,7 +85,7 @@
             if (!ok) return;
             if (!x.up) { failed++; net.flash(x.id, 'err', 200); return; }
             x.queue++;
-            work(x, performance.now());
+            work(x, RT.now());
           });
         });
       }
@@ -98,7 +98,7 @@
           ctx.after(1000 + Math.random() * 500, () => {
             x.active = Math.max(0, x.active - 1);
             if (!x.up) { failed++; return; }
-            const l = (performance.now() - t0) * 1; x.lat = x.lat * .8 + l * .2;
+            const l = (RT.now() - t0) * 1; x.lat = x.lat * .8 + l * .2;
             served++; x.served++; latSum += l;
             net.send(x.id, 'lb', { color: 'res', r: 3, dur: 240, linear: true });
           });
@@ -174,13 +174,13 @@
         if (tokens < 1) { net.flash('rate', 'err'); await net.send('rate', 'client', { label: '429', color: 'bad', dur: 420 }); badN++; stats.set('bad', badN, 'bad'); fin(429, 'bad', 'Too many requests. The bucket is empty, so wait for it to refill.'); ctx.mission('429'); return; }
         tokens--; bucket.set((tokens / capS.value) * 100); net.flash('rate', 'hit', 120);
         await step('rate', 'cache');
-        if (cache.has(r) && cache.get(r) > performance.now()) { net.flash('cache', 'hit'); await net.send('cache', 'client', { label: '200', color: 'res', dur: 420 }); hitN++; okN++; stats.set('hit', hitN, 'good'); stats.set('ok', okN); fin(200, 'cache', 'Served from the gateway cache. No backend was touched.'); ctx.mission('cache'); return; }
+        if (cache.has(r) && cache.get(r) > RT.now()) { net.flash('cache', 'hit'); await net.send('cache', 'client', { label: '200', color: 'res', dur: 420 }); hitN++; okN++; stats.set('hit', hitN, 'good'); stats.set('ok', okN); fin(200, 'cache', 'Served from the gateway cache. No backend was touched.'); ctx.mission('cache'); return; }
         await step('cache', 'route');
         const target = r.includes('users') ? ['users'] : r.includes('orders') ? ['orders'] : r.includes('search') ? ['search'] : ['users', 'orders', 'search'];
         await Promise.all(target.map(async (t) => { await net.send('route', t, { color: 'req', dur: 300 }); net.flash(t, 'on', 240); await ctx.sleep(180); await net.send(t, 'route', { color: 'res', dur: 300 }); }));
         ms += 40 + target.length * 5;
         await net.send('route', 'client', { label: '200', color: 'res', dur: 520 });
-        cache.set(r, performance.now() + 15000); okN++; stats.set('ok', okN);
+        cache.set(r, RT.now() + 15000); okN++; stats.set('ok', okN);
         fin(200, 'res', target.length > 1 ? 'Three services answered, and the gateway merged them into one response.' : `Routed to ${target[0]}. Cached for 15 s.`);
         ctx.mission(target.length > 1 ? 'agg' : 'ok'); ctx.mission('ok');
       }
@@ -276,14 +276,14 @@
       net.state(ORIGIN, 'alt');
       let hits = 0, reqs = 0, busy = false;
       const paint = () => {
-        const n = performance.now(); let st = 0;
+        const n = RT.now(); let st = 0;
         POPS.forEach((p) => { const x = stateP[p], live = x.has && x.exp > n; if (live) st++; if (p !== ORIGIN || x.up) net.sub(p, !x.up ? 'edge: DOWN' : live ? `edge: cached ${Math.ceil((x.exp - n) / 1000)}s` : 'edge: empty'); net.state(p, !x.up ? 'dead' : live ? 'hit' : p === ORIGIN ? 'alt' : ''); });
         stats.set('store', st);
       };
       ctx.every(1000, paint);
       function pushAll() {
         if (mode.value !== 'push') mode.set('push');
-        POPS.forEach((p) => { if (stateP[p].up) { stateP[p].has = true; stateP[p].exp = performance.now() + 3600000; net.send(ORIGIN, p, { color: 'cache', dur: 800 }); } });
+        POPS.forEach((p) => { if (stateP[p].up) { stateP[p].has = true; stateP[p].exp = RT.now() + 3600000; net.send(ORIGIN, p, { color: 'cache', dur: 800 }); } });
         banner.className = 'banner cache'; banner.textContent = 'File pushed to every edge. Storage cost is now 9 copies, and no user pays a first-miss penalty.'; paint();
       }
       function expire() { POPS.forEach((p) => { if (stateP[p].has) stateP[p].exp = 0; }); paint(); armed = true; }
@@ -300,7 +300,7 @@
         }
         const live = POPS.filter((p) => stateP[p].up).sort((a, b) => rttMs(c, a) - rttMs(c, b));
         if (!live.length) { banner.className = 'banner bad'; banner.textContent = 'Every edge is down.'; busy = false; return; }
-        const pop = live[0], nearest = POPS.slice().sort((a, b) => rttMs(c, a) - rttMs(c, b))[0], x = stateP[pop], now = performance.now();
+        const pop = live[0], nearest = POPS.slice().sort((a, b) => rttMs(c, a) - rttMs(c, b))[0], x = stateP[pop], now = RT.now();
         if (pop !== nearest) ctx.mission('kill');
         await net.send(c, pop, { label: 'anycast', color: 'req', dur: 600 });
         let lat = rttMs(c, pop) * 2;
@@ -314,7 +314,7 @@
           net.state(pop, 'miss');
           if (pop !== ORIGIN) { await net.send(pop, ORIGIN, { label: 'MISS', color: 'ref', dur: 700 }); await net.send(ORIGIN, pop, { label: 'file', color: 'ref', dur: 700 }); }
           lat += rttMs(pop, ORIGIN) * 2;
-          x.has = true; x.pulled = true; x.exp = performance.now() + ttl.value * 1000;
+          x.has = true; x.pulled = true; x.exp = RT.now() + ttl.value * 1000;
           await net.send(pop, c, { label: 'file', color: 'res', dur: 500 });
           stats.set('lat', lat + ' ms', 'warn'); banner.className = 'banner warn';
           banner.textContent = `Edge miss in ${pop}: it fetched from ${ORIGIN} first, so this took ${lat} ms. The next user near here gets a hit.`;
