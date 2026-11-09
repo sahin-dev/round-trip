@@ -59,7 +59,8 @@
     return out;
   };
 
-  /* The player. Back and Next play one step; Play runs to the end, pausing to let each caption be read. */
+  /* The player. It draws the diagram, the caption and the list of steps; the page's control dock drives it
+     through root.target. Back and Next play one step; Play runs to the end, pausing so each caption can be read. */
   RT.renderScene = (id, pageCtx) => {
     const sc = RT.SCENES[id];
     if (!sc) return null;
@@ -77,35 +78,12 @@
     const cap = h('p', { class: 'scn-text' });
     const num = h('span', { class: 'scn-num' });
     const capBox = h('div', { class: 'scn-cap', 'aria-live': 'polite' }, num, cap);
-    const btn = (k, label, fn, extra) => h('button', Object.assign({ class: 'pb-btn', onclick: fn }, extra || {}), RT.icon(k), h('span', null, label));
-    const back = btn('back', say('Back', 'পেছনে'), () => jump(idx - 1), { title: say('Previous step (←)', 'আগের ধাপ (←)') });
-    const play = h('button', { class: 'pb-btn pb-main', onclick: toggle });
-    const next = btn('step', say('Next', 'পরের ধাপ'), () => jump(idx + 1), { title: say('Next step (→)', 'পরের ধাপ (→)') });
-    const reset = btn('reset', say('Reset', 'রিসেট'), () => restart(), { title: say('Back to the start (R)', 'শুরুতে ফিরুন (R)') });
-    const speeds = h('div', { class: 'pb-speed', role: 'group', 'aria-label': say('Speed', 'গতি') }, [[.5, '½×'], [1, '1×'], [2, '2×']].map(([v, t]) => {
-      const b = h('button', { 'aria-pressed': String(v === RT.speed), onclick() { RT.setSpeed(v); } }, t); b.dataset.v = v; return b;
-    }));
-    const dots = h('div', { class: 'scn-dots', role: 'group', 'aria-label': say('Steps', 'ধাপ') }, steps.map((st, i) =>
-      h('button', { class: 'scn-dot', 'aria-label': say('Step ', 'ধাপ ') + (i + 1), title: st.text, onclick() { jump(i); } })));
-    const list = h('ol', { class: 'scn-list' }, steps.map((st, i) => h('li', null, h('button', { onclick() { jump(i); } }, st.text))));
-    const bar = h('div', { class: 'playbar scn-bar', role: 'toolbar', 'aria-label': say('Walkthrough controls', 'ধাপে ধাপে নিয়ন্ত্রণ') },
-      h('div', { class: 'pb-group' }, back, play, next, reset),
-      h('div', { class: 'pb-group' }, h('span', { class: 'pb-lbl' }, say('Speed', 'গতি')), speeds),
-      h('div', { class: 'pb-group pb-state' }, dots));
-    const root = h('section', { class: 'scene', tabindex: 0, 'aria-label': say('Animated walkthrough', 'অ্যানিমেটেড ব্যাখ্যা'), onkeydown: keys },
-      h('div', { class: 'scn-head' }, h('h2', null, say('Watch it work', 'দেখুন কীভাবে কাজ করে')), h('span', { class: 'small muted' }, say(`${steps.length} steps · Space plays, arrows step`, `${steps.length}টি ধাপ · Space চালায়, তীর দিয়ে ধাপ`))),
-      bar, stage, capBox,
+    const list = h('ol', { class: 'scn-list' }, steps.map((st) => h('li', null, st.text)));
+    const root = h('section', { class: 'scene', 'aria-label': say('Animated walkthrough', 'অ্যানিমেটেড ব্যাখ্যা') },
+      h('div', { class: 'scn-head' }, h('h2', null, say('Watch it work', 'দেখুন কীভাবে কাজ করে')), h('span', { class: 'small muted' }, say(`${steps.length} steps · use the controls at the top`, `${steps.length}টি ধাপ · ওপরের নিয়ন্ত্রণ ব্যবহার করুন`))),
+      stage, capBox,
       h('details', { class: 'scn-all', open: true }, h('summary', null, say('Every step in words', 'প্রতিটি ধাপ লেখায়')), list));
-
-    function keys(e) {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const tag = e.target.tagName, k = e.key.toLowerCase();
-      if (k === ' ' && /^(BUTTON|SUMMARY|A)$/.test(tag)) return;
-      if (k === ' ' || k === 'k') { e.preventDefault(); toggle(); }
-      else if (k === 'arrowright') { e.preventDefault(); jump(idx + 1); }
-      else if (k === 'arrowleft') { e.preventDefault(); jump(idx - 1); }
-      else if (k === 'r') { e.preventDefault(); restart(); }
-    }
+    const listeners = new Set();
     /* A fresh drawing and context for every jump, so whatever was moving simply stops. */
     function fresh() {
       if (ctx) ctx.dispose();
@@ -154,18 +132,11 @@
     }
     const settle = (i) => steps[i].beats.flat().forEach((a) => act(a, true));
     function paint() {
-      const p = clock.paused || !auto;
-      play.textContent = '';
-      const end = idx >= steps.length - 1 && !busy;
-      play.append(RT.icon(p ? (end ? 'reset' : 'play') : 'pause'), h('span', null, p ? (end ? say('Replay', 'আবার দেখুন') : idx < 0 ? say('Play', 'চালান') : say('Play', 'চালান')) : say('Pause', 'থামান')));
-      play.setAttribute('aria-pressed', String(!p));
       root.classList.toggle('is-paused', clock.paused);
-      bar.classList.toggle('is-paused', clock.paused);
-      back.disabled = idx <= 0; next.disabled = idx >= steps.length - 1;
-      [...dots.children].forEach((d, i) => { d.className = 'scn-dot' + (i < idx ? ' done' : i === idx ? ' now' : ''); });
       [...list.children].forEach((li, i) => li.classList.toggle('now', i === idx));
-      if (idx < 0) { num.textContent = '▶'; cap.textContent = say(`Press Play to watch ${steps.length} short steps, or use Next to go one at a time.`, `${steps.length}টি ছোট ধাপ দেখতে চালান চাপুন, অথবা এক এক করে দেখতে পরের ধাপ চাপুন।`); }
+      if (idx < 0) { num.textContent = '▶'; cap.textContent = say(`Press Play at the top to watch ${steps.length} short steps, or Next to go one at a time.`, `${steps.length}টি ছোট ধাপ দেখতে ওপরে চালান চাপুন, অথবা এক এক করে দেখতে পরেরটি চাপুন।`); }
       else { num.textContent = (idx + 1) + '/' + steps.length; cap.textContent = steps[idx].text; }
+      listeners.forEach((f) => f());
     }
     /* Show step i: everything before it in place at once, then step i itself animated. */
     async function jump(i, keepAuto) {
@@ -199,7 +170,26 @@
     function restart() { run++; auto = false; busy = false; idx = -1; clock.play(); fresh(); paint(); }
     clock.on(paint);
     restart();
-    if (pageCtx) pageCtx.onDispose(() => { run++; if (ctx) ctx.dispose(); clock.dispose(); });
+    if (pageCtx) pageCtx.onDispose(() => { run++; listeners.clear(); if (ctx) ctx.dispose(); clock.dispose(); });
+    /* What the control dock does on a Theory tab. */
+    root.target = {
+      name: say('Walkthrough', 'ধাপে ধাপে'),
+      playing: () => auto && !clock.paused,
+      ended: () => idx >= steps.length - 1 && !busy,
+      toggle, reset: restart,
+      next: () => jump(idx + 1), back: () => jump(idx - 1), jump: (i) => jump(i),
+      canBack: () => idx > 0, canNext: () => idx < steps.length - 1,
+      steps: () => ({ n: steps.length, idx }),
+      status: () => (idx < 0 ? say(`${steps.length} steps, ready`, `${steps.length}টি ধাপ, প্রস্তুত`) : say(`Step ${idx + 1} of ${steps.length}`, `ধাপ ${idx + 1} / ${steps.length}`)),
+      /* Bring the diagram into view when it is driven from the dock, without moving if it is already visible. */
+      reveal() {
+        const r = stage.getBoundingClientRect();
+        if (r.height && (r.top < 60 || r.bottom > innerHeight)) stage.scrollIntoView({ block: 'center', behavior: RT.reduced ? 'auto' : 'smooth' });
+      },
+      suspend() { const was = auto && !clock.paused; if (was) clock.pause(); return was; },
+      resume() { clock.play(); },
+      on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    };
     return root;
   };
 

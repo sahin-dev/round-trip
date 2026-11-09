@@ -37,6 +37,7 @@ window.RT = (function () {
     try { return JSON.parse(localStorage.getItem('roundtrip.settings')) || {}; } catch { return {}; }
   })());
   settings.assume = Object.assign(defaultAssume(), settings.assume);
+  settings.speed = [.25, .5, 1, 2, 4].includes(+settings.speed) ? +settings.speed : 1;
   const saveSettings = () => { try { localStorage.setItem('roundtrip.settings', JSON.stringify(settings)); } catch { /* settings last for this visit */ } };
   const isReduced = () => osReduced || settings.motion;
 
@@ -197,17 +198,22 @@ window.RT = (function () {
           cancel() { on = false; },
         };
       },
+      /* A lab that can stop between messages. It has no buttons of its own: the page's control dock shows
+         a "One step at a time" switch for it, and its Next button releases each pause. */
       stepper() {
-        let mode = 'auto', resolve = null;
-        const release = () => { if (resolve) { const r = resolve; resolve = null; next.disabled = true; r(); } };
-        const next = h('button', { class: 'btn primary', id: def.id + '-next', disabled: true, onclick: release }, 'Next step');
-        const seg = ui.seg('Playback', [['auto', 'Auto'], ['step', 'Step by step']], 'auto', (v) => { mode = v; if (v === 'auto') release(); });
-        return {
-          el: h('div', { class: 'field' }, h('span', { class: 'fieldlabel' }, 'Playback'), h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, seg, next)),
-          gate() { if (mode === 'auto') return Promise.resolve(); next.disabled = false; return new Promise((r) => { resolve = r; }); },
-          get stepping() { return mode === 'step'; },
+        let resolve = null;
+        const st = {
+          el: null,
+          get stepping() { return !!settings.stepMode; },
+          get waiting() { return !!resolve; },
+          gate() { if (!settings.stepMode || !alive) return Promise.resolve(); return new Promise((r) => { resolve = r; dockPaint(); }); },
+          release() { if (resolve) { const r = resolve; resolve = null; dockPaint(); r(); } },
         };
+        ctx.stepperObj = st;
+        return st;
       },
+      /* Hand this page's control dock something to drive, such as a journey on the System Map. */
+      useDock(target) { if (pageDock) pageDock.attach(target); },
       dispose() {
         if (!alive) return;
         alive = false;
@@ -574,7 +580,7 @@ window.RT = (function () {
   function setSpeed(v) {
     clocks.forEach((c) => c.rebase());
     speed = v; settings.speed = v; saveSettings();
-    document.querySelectorAll('.speed button, .pb-speed button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.v === v)));
+    document.querySelectorAll('.dk-speed button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.v === v)));
     clocks.forEach((c) => c.emit());
   }
   function railGroups() {
@@ -595,12 +601,6 @@ window.RT = (function () {
     old.replaceWith(fresh); refreshRail();
   }
   function buildRail() {
-    const speeds = SPEEDS;
-    const sp = h('div', { class: 'speed' }, h('span', null, 'Speed'), speeds.map(([v, t]) => {
-      const b = h('button', { 'aria-pressed': String(v === speed), onclick() { setSpeed(v); } }, t);
-      b.dataset.v = v;
-      return b;
-    }));
     const nav = h('nav', { 'aria-label': 'Labs' },
       h('a', { class: 'port', href: '#', 'data-lab': 'home' }, h('span', { class: 'led full', style: { background: '#fff', boxShadow: 'none' } }), 'Press Enter'),
       railGroups().map(([group, ids]) => {
@@ -614,8 +614,7 @@ window.RT = (function () {
       h('button', { class: 'rail-toggle', 'aria-label': 'Show all labs', onclick() { railEl.classList.toggle('open'); } }, 'All labs'),
       h('div', { class: 'rail-tools' }, h('button', { id: 'open-search', onclick() { RT.openSearch(); } }, 'Search'), h('button', { id: 'open-settings', onclick() { RT.openSettings(); } }, 'Settings')),
       h('div', { class: 'lang-switch', role: 'group', 'aria-label': 'Language' }, h('button', { id: 'lang-en', 'aria-pressed': String(settings.lang !== 'bn'), onclick() { RT.setLang('en'); } }, 'English'), h('button', { id: 'lang-bn', 'aria-pressed': String(settings.lang === 'bn'), onclick() { RT.setLang('bn'); } }, 'বাংলা')),
-      nav,
-      h('div', { class: 'rail-foot' }, sp));
+      nav);
     return railEl;
   }
   RT_quiz = function (c) {
@@ -634,46 +633,105 @@ window.RT = (function () {
   const icon = (k) => s('svg', { class: 'pb-ico', viewBox: '0 0 20 20', 'aria-hidden': 'true', focusable: 'false' }, s('path', { d: ICONS[k] }));
   const SPEEDS = [[.25, '¼×'], [.5, '½×'], [1, '1×'], [2, '2×'], [4, '4×']];
   const bnSay = (en, b) => (settings.lang === 'bn' ? b : en);
-  /* Play, pause, step, reset and speed for anything that runs on a clock. opts: { clock, onReset, onStep, time } */
-  function playbar(o) {
-    const cl = o.clock || clock;
-    const pp = h('button', { class: 'pb-btn pb-main', id: o.id ? o.id + '-play' : null, onclick() { cl.toggle(); } });
-    const step = h('button', { class: 'pb-btn', id: o.id ? o.id + '-step' : null, title: bnSay('Pause and move forward a moment (.)', 'থামিয়ে একটু এগিয়ে যান (.)'), onclick() { if (o.onStep) o.onStep(); else cl.step(o.stepMs || 300); } }, icon('step'), h('span', null, bnSay('Step', 'এক ধাপ')));
-    const reset = o.onReset && h('button', { class: 'pb-btn', id: o.id ? o.id + '-reset' : null, title: bnSay('Start this again from the beginning (R)', 'একদম শুরু থেকে আবার (R)'), onclick: o.onReset }, icon('reset'), h('span', null, bnSay('Reset', 'রিসেট')));
-    const sp = h('div', { class: 'pb-speed', role: 'group', 'aria-label': bnSay('Speed', 'গতি') }, SPEEDS.map(([v, t]) => {
-      const b = h('button', { 'aria-pressed': String(v === speed), title: bnSay('Speed ', 'গতি ') + t, onclick() { setSpeed(v); } }, t);
+  /* ---------- the control dock ----------
+     A page that animates gets exactly one control bar, and nothing else on the page plays, pauses or
+     changes speed. The dock drives whatever is on screen: the walkthrough on a Theory tab, the lab on a
+     Lab tab, the journey on the System Map. Each of those hands the dock a target saying what it can do:
+       { name, playing(), toggle(), next(), reset(), status(),
+         optional: back(), canBack(), canNext(), ended(), steps() → { n, idx }, jump(i), stepper(),
+                   nextTitle(), backTitle, reveal(), suspend() → wasPlaying, resume(), on(fn) → off, ticks } */
+  let pageDock = null;
+  const dockPaint = () => { if (pageDock) pageDock.paint(); };
+  function Dock() {
+    let t = null, off = null;
+    const reveal = () => { if (t && t.reveal) t.reveal(); };
+    const btn = (k, id, en, b, fn) => h('button', { class: 'dk-btn', id, type: 'button', onclick() { if (t) { fn(); reveal(); paint(); } } }, icon(k), h('span', null, bnSay(en, b)));
+    const back = btn('back', 'dk-back', 'Back', 'পেছনে', () => t.back());
+    const play = h('button', { class: 'dk-btn dk-main', id: 'dk-play', type: 'button', onclick() { if (t) { t.toggle(); reveal(); paint(); } } });
+    const next = btn('step', 'dk-next', 'Next', 'পরেরটি', () => t.next());
+    const reset = btn('reset', 'dk-reset', 'Reset', 'রিসেট', () => t.reset());
+    reset.title = bnSay('Start again from the beginning (R)', 'একদম শুরু থেকে আবার (R)');
+    const lamp = h('span', { class: 'dk-lamp', 'aria-hidden': 'true' }), name = h('b', { class: 'dk-name' }), status = h('span', { class: 'dk-status', role: 'status' });
+    const dots = h('div', { class: 'dk-steps', role: 'group', 'aria-label': bnSay('Jump to a step', 'একটি ধাপে যান') });
+    const modeIn = h('input', { type: 'checkbox', id: 'dk-mode', onchange() {
+      settings.stepMode = modeIn.checked; saveSettings();
+      const st = t && t.stepper && t.stepper();
+      if (st && !modeIn.checked) st.release();
+      paint();
+    } });
+    const mode = h('label', { class: 'dk-mode', for: 'dk-mode', title: bnSay('Stop after every message and wait for Next', 'প্রতিটি বার্তার পরে থেমে পরেরটির অপেক্ষা') }, modeIn, bnSay('One step at a time', 'এক এক ধাপ করে'));
+    const sp = h('div', { class: 'dk-speed', role: 'group', 'aria-label': bnSay('Speed', 'গতি') }, SPEEDS.map(([v, txt]) => {
+      const b = h('button', { type: 'button', 'aria-pressed': String(v === speed), title: bnSay('Speed ', 'গতি ') + txt, onclick() { setSpeed(v); } }, txt);
       b.dataset.v = v; return b;
     }));
-    const dot = h('span', { class: 'pb-dot', 'aria-hidden': 'true' }), status = h('span', { class: 'pb-status', role: 'status' }), time = h('span', { class: 'pb-time mono' });
-    const el = h('div', { class: 'playbar', role: 'toolbar', 'aria-label': bnSay('Animation controls', 'অ্যানিমেশন নিয়ন্ত্রণ') },
-      h('div', { class: 'pb-group' }, pp, step, reset),
-      h('div', { class: 'pb-group' }, h('span', { class: 'pb-lbl' }, bnSay('Speed', 'গতি')), sp),
-      h('div', { class: 'pb-group pb-state' }, dot, status, time));
-    const t0 = cl.now();
-    const paint = () => {
-      const p = cl.paused;
-      pp.textContent = ''; pp.append(icon(p ? 'play' : 'pause'), h('span', null, p ? bnSay('Play', 'চালান') : bnSay('Pause', 'থামান')));
-      pp.setAttribute('aria-pressed', String(!p)); pp.title = p ? bnSay('Carry on (Space or K)', 'আবার চালান (Space বা K)') : bnSay('Freeze everything (Space or K)', 'সব থামিয়ে রাখুন (Space বা K)');
-      el.classList.toggle('is-paused', p);
-      status.textContent = p ? bnSay('Paused', 'থেমে আছে') : bnSay('Running', 'চলছে') + ' · ' + (SPEEDS.find((x) => x[0] === speed) || [0, speed + '×'])[1];
-      if (o.time !== false) time.textContent = bnSay('sim ', 'সময় ') + ((cl.now() - t0) / 1000).toFixed(1) + ' s';
+    /* Two steady rows: the controls, then what they are driving and where it has got to. */
+    const el = h('div', { class: 'dock', role: 'toolbar', 'aria-label': bnSay('Animation controls', 'অ্যানিমেশন নিয়ন্ত্রণ'), hidden: true },
+      h('div', { class: 'dk-row' },
+        h('div', { class: 'dk-btns' }, back, play, next, reset), mode,
+        h('div', { class: 'dk-speedwrap' }, h('span', { class: 'dk-lbl' }, bnSay('Speed', 'গতি')), sp)),
+      h('div', { class: 'dk-row dk-what' }, lamp, name, status, dots,
+        h('span', { class: 'dk-keys', 'aria-hidden': 'true' }, bnSay('Keys: Space plays · ← → step · R resets', 'কী: Space চালায় · ← → ধাপ · R রিসেট'))));
+    function paint() {
+      el.hidden = !t;
+      if (!t) return;
+      const playing = t.playing(), ended = !playing && !!(t.ended && t.ended());
+      name.textContent = t.name;
+      status.textContent = t.status();
+      el.classList.toggle('is-paused', !playing);
+      play.textContent = '';
+      play.append(icon(playing ? 'pause' : ended ? 'reset' : 'play'), h('span', null, playing ? bnSay('Pause', 'থামান') : ended ? bnSay('Replay', 'আবার দেখুন') : bnSay('Play', 'চালান')));
+      play.setAttribute('aria-pressed', String(playing));
+      play.title = playing ? bnSay('Pause (Space)', 'থামান (Space)') : bnSay('Play (Space)', 'চালান (Space)');
+      back.disabled = !(t.canBack && t.canBack());
+      back.title = t.backTitle || bnSay('Previous step (←)', 'আগের ধাপ (←)');
+      next.disabled = t.canNext ? !t.canNext() : false;
+      next.title = t.nextTitle ? t.nextTitle() : bnSay('Next step (→)', 'পরের ধাপ (→)');
+      const st = t.stepper && t.stepper();
+      next.classList.toggle('dk-attn', !!(st && st.waiting));
+      mode.hidden = !st; modeIn.checked = !!settings.stepMode;
+      const s = t.steps && t.steps();
+      dots.hidden = !s;
+      if (s) {
+        if (dots.children.length !== s.n) {
+          dots.textContent = '';
+          for (let i = 0; i < s.n; i++) dots.append(h('button', { class: 'dk-dot', type: 'button', 'aria-label': bnSay('Step ', 'ধাপ ') + (i + 1), onclick() { if (t && t.jump) { t.jump(i); reveal(); paint(); } } }));
+        }
+        [...dots.children].forEach((d, i) => { d.className = 'dk-dot' + (i < s.idx ? ' done' : i === s.idx ? ' now' : ''); if (i === s.idx) d.setAttribute('aria-current', 'step'); else d.removeAttribute('aria-current'); });
+      }
+    }
+    /* A running lab's clock readout moves on its own; everything else repaints when it changes. */
+    const iv = setInterval(() => { if (t && t.ticks && t.playing()) paint(); }, 250);
+    return {
+      el, paint,
+      get target() { return t; },
+      /* Switching what the dock drives pauses what you left, and resumes it if you come back. */
+      attach(nt) {
+        if (t === (nt || null)) { paint(); return; }
+        if (t && t.suspend) t.held = t.suspend();
+        if (off) { off(); off = null; }
+        t = nt || null;
+        if (t && t.held && t.resume) { t.held = false; t.resume(); }
+        if (t && t.on) off = t.on(paint);
+        paint();
+      },
+      dispose() { if (off) off(); off = null; clearInterval(iv); },
     };
-    const off = cl.on(paint);
-    const iv = o.time === false ? 0 : setInterval(() => { if (!cl.paused) paint(); }, 200);
-    paint();
-    return { el, paint, dispose() { off(); clearInterval(iv); } };
   }
-  /* Keyboard: Space or K pauses, full stop steps, R resets. Typing in a field never triggers them. */
-  let activeBar = null;
+  /* Keys work anywhere on the page, except while typing: Space or K plays and pauses, the arrow keys
+     (or comma and full stop) step back and forward, and R resets. */
   document.addEventListener('keydown', (e) => {
-    if (!activeBar || e.ctrlKey || e.metaKey || e.altKey || !activeBar.el.isConnected || !activeBar.el.offsetParent) return;
-    const t = e.target, tag = (t && t.tagName) || '';
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (t && t.isContentEditable) || (t && t.closest && t.closest('dialog, .scene'))) return;
+    const t = pageDock && pageDock.target;
+    if (!t || e.ctrlKey || e.metaKey || e.altKey || !pageDock.el.isConnected) return;
+    const el = e.target, tag = (el && el.tagName) || '';
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (el && el.isContentEditable) || (el && el.closest && el.closest('dialog'))) return;
     const k = e.key.toLowerCase();
-    if (k === ' ' && /^(BUTTON|A|SUMMARY)$/.test(tag)) return;
-    if (k === ' ' || k === 'k') { e.preventDefault(); activeBar.clock.toggle(); }
-    else if (k === '.') { e.preventDefault(); activeBar.clock.step(300); }
-    else if (k === 'r' && activeBar.reset) { e.preventDefault(); activeBar.reset(); }
+    if (k === ' ' && /^(BUTTON|A|SUMMARY|LABEL)$/.test(tag)) return;
+    const act = { ' ': 'toggle', k: 'toggle', arrowright: 'next', '.': 'next', arrowleft: 'back', ',': 'back', r: 'reset' }[k];
+    if (!act || (act === 'back' && !(t.canBack && t.canBack())) || (act === 'next' && t.canNext && !t.canNext())) return;
+    e.preventDefault();
+    t[act]();
+    if (t.reveal) t.reveal();
+    pageDock.paint();
   });
 
   function renderLab(def) {
@@ -686,6 +744,8 @@ window.RT = (function () {
     } };
     const ctx = makeCtx(def, side);
     current = ctx;
+    const D = pageDock = Dock();
+    ctx.onDispose(() => { D.dispose(); if (pageDock === D) pageDock = null; });
     const stage = h('div', { class: 'labmain' });
     const sideEl = h('aside', { class: 'side' });
     const check = RT.checkFor ? RT.checkFor(def) : def.check;
@@ -700,46 +760,68 @@ window.RT = (function () {
       h('h1', null, T('title', def.title)), h('p', { class: 'lede' }, T('lede', def.lede))));
     const labPane = h('div', { class: 'labgrid ' + (def.wide ? 'wide' : '') }, stage, sideEl);
     side.refresh();
-    let mounted = false, labCtx = null, bar = null;
-    /* Topic labs get playback controls. Reset throws the lab away and builds it again from nothing. */
-    const reset = () => {
-      if (labCtx) labCtx.dispose();
-      clock.clear(); clock.play();
-      [...stage.childNodes].forEach((n) => { if (!bar || n !== bar.el) n.remove(); });
-      mounted = false; mount();
-      toast(bnSay('Lab reset: everything is back to the start', 'ল্যাব রিসেট: সবকিছু শুরুর অবস্থায়'));
-    };
-    if (!def.plain && !def.theoryOnly && theory) {
-      bar = playbar({ id: 'pb', onReset: reset });
-      stage.append(bar.el);
-      activeBar = { el: bar.el, clock, reset };
-      /* A paused lab wakes up when you ask it to do something. */
-      stage.addEventListener('click', (e) => {
-        if (clock.paused && !e.target.closest('.playbar') && e.target.closest('button, .chip, .node.click')) clock.play();
-      }, true);
-      ctx.onDispose(() => { bar.dispose(); if (activeBar && activeBar.el === bar.el) activeBar = null; });
-    }
-    ctx.onDispose(() => { if (labCtx) labCtx.dispose(); });
+    let mounted = false, labCtx = null, labT0 = 0;
     const mount = () => {
       if (mounted) return;
       mounted = true;
       labCtx = makeCtx(def, side);
-      if (bar) bar.paint();
+      labT0 = clock.now();
       if (RT.beforeLab) RT.beforeLab(stage, def, labCtx);
       try { def.render(stage, labCtx); } catch (e) { showCrash(stage, e); }
       if (RT.afterLab) RT.afterLab(stage, def, labCtx);
+      D.paint();
     };
-    if (def.theoryOnly) { mainEl.append(RT.renderTheory(def, null, ctx)); return; }
-    if (!theory) { mainEl.append(labPane); mount(); return; }
+    ctx.onDispose(() => { if (labCtx) labCtx.dispose(); });
+    /* Reset throws the lab away and builds it again from nothing. */
+    const reset = () => {
+      if (labCtx) labCtx.dispose();
+      clock.clear(); clock.play();
+      stage.textContent = '';
+      mounted = false; mount();
+      toast(bnSay('Lab reset: everything is back to the start', 'ল্যাব রিসেট: সবকিছু শুরুর অবস্থায়'));
+    };
+    const stepperOf = () => (labCtx && labCtx.stepperObj) || null;
+    const waiting = () => { const st = stepperOf(); return !!(st && st.waiting); };
+    /* What the dock does on a Lab tab. Labs only run forward, so Next nudges time on, or shows the next
+       message when the lab is stopping after each one. */
+    const labTarget = {
+      name: bnSay('Lab', 'ল্যাব'), ticks: true,
+      playing: () => !clock.paused && !waiting(),
+      toggle() { if (waiting()) { clock.play(); stepperOf().release(); } else clock.toggle(); },
+      next() { if (waiting()) { clock.play(); stepperOf().release(); } else clock.step(300); },
+      reset,
+      canBack: () => false,
+      backTitle: bnSay('A lab only runs forward. Use Reset to start again.', 'ল্যাব শুধু সামনে চলে। আবার শুরু করতে রিসেট চাপুন।'),
+      nextTitle: () => (waiting() ? bnSay('Show the next message (→)', 'পরের বার্তা দেখান (→)') : bnSay('Move forward a moment (→)', 'একটু এগিয়ে যান (→)')),
+      stepper: stepperOf,
+      status() {
+        if (waiting()) return bnSay('Waiting for you: press Next', 'আপনার অপেক্ষায়: পরেরটি চাপুন');
+        const sim = ((clock.now() - labT0) / 1000).toFixed(1);
+        return (clock.paused ? bnSay('Paused', 'থেমে আছে') : bnSay('Running', 'চলছে')) + ' · ' + bnSay('sim time ', 'সিমুলেশন ') + sim + ' s';
+      },
+      suspend() { const was = !clock.paused; clock.pause(); return was; },
+      resume() { clock.play(); },
+      on: (fn) => clock.on(fn),
+    };
+    const sceneOf = (root) => { const sc = root && root.querySelector('.scene'); return (sc && sc.target) || null; };
+    if (def.theoryOnly) { const art = RT.renderTheory(def, null, ctx); mainEl.append(D.el, art); D.attach(sceneOf(art)); return; }
+    if (!theory) { mainEl.append(D.el, labPane); mount(); return; }
+    /* A paused lab wakes up when you ask it to do something. */
+    if (RT.SCENES && RT.SCENES[def.id]) stage.addEventListener('click', (e) => { if (clock.paused && e.target.closest('button, .chip, .node.click')) clock.play(); }, true);
     const pane = h('div', { class: 'theory-pane' });
+    const topic = !!(RT.SCENES && RT.SCENES[def.id]);
+    let sceneTarget = null;
     const tabs = ui.tabs([['theory', 'Theory'], ['lab', 'Lab']], (v) => {
       pane.classList.toggle('hide', v !== 'theory'); labPane.classList.toggle('hide', v !== 'lab');
       settings.tab[def.id] = v; saveSettings();
       if (v === 'lab') mount();
+      /* Practice tools such as the Estimator and Studio have their own controls, so the dock is for topics. */
+      D.attach(v === 'lab' ? (topic ? labTarget : null) : sceneTarget);
     });
     tabs.classList.add('topic-tabs');
     pane.append(RT.renderTheory(def, () => { tabs.set('lab'); window.scrollTo(0, 0); }, ctx));
-    mainEl.append(tabs, pane, labPane);
+    sceneTarget = sceneOf(pane);
+    mainEl.append(tabs, D.el, pane, labPane);
     const first = settings.tab[def.id] || (settings.openOn === 'auto' ? (settings.level === 'pro' || (progress[def.id] || []).length ? 'lab' : 'theory') : settings.openOn);
     tabs.set(first);
   }
@@ -786,6 +868,6 @@ window.RT = (function () {
     route();
   }
 
-  return { h, s, ui, clamp, lerp, ease, glide, hash, seeded, hexOf, fmtMs, sha256, hmac, utf8, Net, Ladder, Clock, clock, now: () => clock.now(), playbar, icon, makeCtx, lab, labs, byId, TRACKS, start, toast, ledClass, settings, saveSettings, applySettings, setSpeed, rebuildRail, defaultAssume, reroute: route, get quiz() { return RT_quiz; }, get speed() { return speed; },
+  return { h, s, ui, clamp, lerp, ease, glide, hash, seeded, hexOf, fmtMs, sha256, hmac, utf8, Net, Ladder, Clock, clock, now: () => clock.now(), icon, makeCtx, lab, labs, byId, TRACKS, start, toast, ledClass, settings, saveSettings, applySettings, setSpeed, rebuildRail, defaultAssume, reroute: route, get quiz() { return RT_quiz; }, get speed() { return speed; },
     get reduced() { return isReduced(); }, get progress() { return progress; }, home: null };
 })();

@@ -27,7 +27,7 @@ const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails.p
 
   await page.evaluate(() => { RT.settings.openOn = 'lab'; RT.saveSettings(); });
   // 3. System Map
-  await page.click('#map-next'); await sleep(1400);
+  await page.click('#dk-next'); await sleep(1400);
   ok(/DNS/.test(await page.$eval('main .banner', (e) => e.textContent)), 'map narrates the first hop');
   ok((await page.$eval('.part', (e) => e.textContent)).includes('Real products'), 'map shows component detail');
   await page.screenshot({ path: path.join(shots, 'map.png'), fullPage: true });

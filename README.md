@@ -43,8 +43,8 @@ Live DNS calls `dns.google`, and fonts come from Google Fonts. If you remove eit
 
 | Path | Contents |
 |---|---|
-| `js/core.js` | Helpers, UI parts, settings, routing, page shell, the animation clock and playback bar |
-| `js/scene.js` | The walkthrough player, and the extra lesson sections (when to use, trade-offs, interview notes, where it is used, a second question) |
+| `js/core.js` | Helpers, UI parts, settings, routing, page shell, the animation clock and the control dock |
+| `js/scene.js` | The walkthrough (driven by the control dock), and the extra lesson sections (when to use, trade-offs, interview notes, where it is used, a second question) |
 | `js/lessons-1.js` … `js/lessons-8.js` | One walkthrough and the extra sections for every topic, by roadmap stage, both languages |
 | `js/lab-*.js`, `js/labs-*.js` | The labs |
 | `js/practice-*.js` | Simulation engine, briefs, Studio and its load test, Workbench, Estimator, Trainer |
@@ -68,9 +68,14 @@ Scripts are classic scripts, loaded in the order set in `index.html`.
 
 Every animation reads time from a clock in `js/core.js` (`RT.clock`, `ctx.now()`), never from `performance.now()` or `setTimeout`. That is what lets one bar pause, step, slow down and reset everything on the page. In a lab, use `ctx.sleep`, `ctx.after`, `ctx.every`, `ctx.loop` and `ctx.frame`, and `RT.now()` for timestamps.
 
-- **Labs** get a playback bar: Play/Pause (Space or K), Step (full stop), Reset (R) and speed from ¼× to 4×. Reset throws the lab away and builds it again. Clicking any control in a paused lab resumes it. A hidden browser tab pauses by itself.
-- **Packets** keep to their own lane on a wire, so requests and replies do not overlap, leave a short trail, light up the wire while they travel, and ring the node they reach. A lost packet tumbles and fades. Reduced motion turns these effects off.
-- **Walkthroughs** on theory pages have their own clock, so they never disturb the lab. Back, Play, Next, Reset, a dot per step and a written list of every step. Space plays, the arrow keys step and R resets while the walkthrough has focus.
+All controls live in one place: the **control dock**, a bar pinned to the top of every topic page and the System Map. Nothing else on the site plays, pauses, steps or sets the speed: not the sidebar, the settings or the labs themselves. Settings keeps only *Reduce motion*, which is an accessibility preference.
+
+- The dock drives whatever is on screen: the walkthrough on a Theory tab, the lab on a Lab tab, the journey on the System Map. Switching tabs pauses what you left and resumes it when you return.
+- The same buttons sit in the same places everywhere: **Back · Play/Pause · Next · Reset**, a dot per step where there are steps, and speed from ¼× to 4×. Labs only run forward, so in a lab Next moves time on a moment and Back is off.
+- Labs that can stop between messages (DNS, TCP/IP, TLS, JWT & OAuth) show a **One step at a time** switch in the dock; Next then shows each message.
+- Keys work anywhere except while typing: Space or K plays and pauses, ← → (or comma and full stop) step, R resets.
+- A page part hands the dock a *target* describing what it can do. See the comment above `Dock` in `js/core.js`; the walkthrough's target is `root.target` in `js/scene.js`, and a lab can add one with `ctx.useDock(target)`, as the System Map does. `ctx.stepper()` gives a lab its message-by-message pauses with no buttons of its own.
+- Packets keep to their own lane on a wire, leave a short trail, light up the wire and ring the node they reach; a lost packet tumbles and fades. Reduced motion turns these off. A hidden browser tab pauses by itself.
 
 ## Adding a topic
 
@@ -79,7 +84,7 @@ Every animation reads time from a clock in `js/core.js` (`RT.clock`, `ctx.now()`
 3. For a lab, put the logic in `js/models.js`, add a render function to `RT.labRender`, and test the model in `tests/models.test.js`.
 4. Add the id to a stage in `STAGES` in `js/learn-more.js`. The sidebar, home page and Everything path all follow that order.
 
-`tests/topics.js` fails if an id does not resolve, a topic is missing from the roadmap, prerequisites form a cycle, a topic comes before its prerequisites, the roadmap drops in difficulty, the two languages differ in structure, a topic has no walkthrough or extra sections, or a walkthrough names a node that does not exist. It also checks that Pause freezes time, Step moves it and Reset rebuilds a lab.
+`tests/topics.js` fails if an id does not resolve, a topic is missing from the roadmap, prerequisites form a cycle, a topic comes before its prerequisites, the roadmap drops in difficulty, the two languages differ in structure, a topic has no walkthrough or extra sections, or a walkthrough names a node that does not exist. It also checks that each page has exactly one control dock and no other animation controls, that Pause freezes time, Next moves it, Reset rebuilds a lab, and the dock follows the Theory and Lab tabs.
 
 ## Adding a language string
 

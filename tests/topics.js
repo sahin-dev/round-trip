@@ -100,24 +100,54 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
   });
   ok(!unfinished.length, 'every topic is complete: ' + unfinished.slice(0, 12));
 
-  // Labs can be paused, nudged forward and reset, and a paused lab stands still.
+  // One control dock per page, and no other animation controls anywhere: not in the sidebar, the
+  // settings, the lab or the walkthrough.
+  const surfaces = () => p.evaluate(() => ({
+    docks: document.querySelectorAll('main .dock').length,
+    others: document.querySelectorAll('.rail .speed, .playbar, .scene button, main [id$="-next"]:not(#dk-next):not(#rv-next):not(#path-next)').length,
+    own: /Step by step|Next step/.test(document.querySelector('main').innerText),
+  }));
+  for (const id of ['tls', 'dns', 'tcp', 'auth', 'lb']) {
+    await go(id); await sleep(150);
+    const s = await surfaces();
+    ok(s.docks === 1 && !s.others && !s.own, id + ' has one control dock and nothing else: ' + JSON.stringify(s));
+  }
+  await p.click('#open-settings'); await sleep(150);
+  ok(!(await p.evaluate(() => /Animation speed/.test(document.querySelector('dialog[open]').innerText))), 'settings no longer hold a speed control');
+  await p.click('#set-close'); await sleep(150);
+
+  // Labs can be paused, nudged forward and reset from the dock, and a paused lab stands still.
   await go('lb'); await sleep(700);
-  ok(await p.$('main .labmain > .playbar') !== null, 'a lab has playback controls');
-  await click('#pb-play'); await sleep(60);
+  ok(await p.$eval('.dk-name', (e) => e.textContent) === 'Lab', 'on the Lab tab the dock drives the lab');
+  await click('#dk-play'); await sleep(60);
   const t0 = await p.evaluate(() => (RT.clock.paused ? RT.now() : -1));
   await sleep(400);
   ok(t0 >= 0 && (await p.evaluate(() => RT.now())) === t0, 'pause stops simulated time');
-  ok(await p.$eval('#pb-play', (e) => /Play/.test(e.textContent)), 'the button offers Play while paused');
-  await click('#pb-step'); await sleep(700);
-  ok(await p.evaluate((t) => RT.clock.paused && RT.now() > t, t0), 'step moves time forward, then stops');
+  ok(await p.$eval('#dk-play', (e) => /Play/.test(e.textContent)), 'the button offers Play while paused');
+  await click('#dk-next'); await sleep(700);
+  ok(await p.evaluate((t) => RT.clock.paused && RT.now() > t, t0), 'Next moves time forward a moment, then stops');
+  ok(await p.$eval('#dk-back', (e) => e.disabled), 'a lab cannot step back');
   await p.keyboard.press('k'); await sleep(60);
   ok(!(await p.evaluate(() => RT.clock.paused)), 'the K key plays again');
   await p.evaluate(() => document.querySelector('main .node.click').dispatchEvent(new MouseEvent('click', { bubbles: true }))); await sleep(60);
-  await click('#pb-reset'); await sleep(150);
-  ok(await p.$$eval('main .labmain > .playbar', (b) => b.length) === 1 && !(await p.$('main .node.dead')), 'reset rebuilds the lab from the start');
-  await click('#pb-play'); await sleep(40);
+  await click('#dk-reset'); await sleep(150);
+  ok(await p.$$eval('main .dock', (b) => b.length) === 1 && !(await p.$('main .node.dead')), 'reset rebuilds the lab from the start');
+  await click('#dk-play'); await sleep(40);
   await go('dns'); await sleep(80);
   ok(!(await p.evaluate(() => RT.clock.paused)), 'leaving a paused lab starts the next one running');
+
+  // A lab that can stop between messages does it from the dock's switch, and Next shows each message.
+  await go('tls'); await sleep(150);
+  ok(await p.$eval('.dk-mode', (e) => !e.hidden), 'the dock offers "one step at a time" for a lab that has it');
+  await p.evaluate(() => { if (!document.querySelector('#dk-mode').checked) document.querySelector('#dk-mode').click(); });
+  await click('#tls-go'); await sleep(1500);
+  const rows1 = await p.$$eval('.lad .row', (r) => r.length);
+  ok(/press Next/.test(await p.$eval('.dk-status', (e) => e.textContent)) && rows1 >= 1, 'the lab waits for Next');
+  await click('#dk-next'); await sleep(1500);
+  ok(await p.$$eval('.lad .row', (r) => r.length) > rows1, 'Next shows the next message');
+  await p.evaluate(() => document.querySelector('#dk-mode').click()); await sleep(60);
+  await go('lb'); await sleep(80);
+  ok(await p.$eval('.dk-mode', (e) => e.hidden), 'the switch is hidden where a lab has no steps');
 
   // Lessons have next and previous links.
   await set({ openOn: 'theory' });
@@ -125,19 +155,28 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
   ok(await p.$('.th-nav') !== null, 'a theory-only lesson has path links');
   ok(await p.$eval('main', (e) => /unlocks/.test(e.textContent)), 'a lesson says what it unlocks');
 
-  // The walkthrough steps forward and back, jumps to any step, and resets.
+  // The dock drives the walkthrough: forward and back, jump to any step, and reset.
   await go('outbox');
   const cap = () => p.$eval('.scene .scn-num', (e) => e.textContent);
-  const sceneBtn = (label) => p.evaluate((t) => [...document.querySelectorAll('.scene .pb-btn')].find((b) => b.textContent.trim() === t).click(), label);
-  ok(await p.$$eval('.scene .scn-dot', (d) => d.length) === 5 && (await p.$$eval('.scene .scn-list li', (l) => l.length)) === 5, 'a walkthrough shows a dot and a written line per step');
-  await sceneBtn('Next'); await sleep(80);
+  ok(await p.$eval('.dk-name', (e) => e.textContent) === 'Walkthrough', 'on a lesson the dock drives the walkthrough');
+  ok(await p.$$eval('.dock .dk-dot', (d) => d.length) === 5 && (await p.$$eval('.scene .scn-list li', (l) => l.length)) === 5, 'the dock shows a dot per step, and the lesson a written line per step');
+  await click('#dk-next'); await sleep(80);
   ok(await cap() === '1/5', 'Next starts at step 1');
-  await p.evaluate(() => document.querySelectorAll('.scene .scn-dot')[3].click()); await sleep(80);
+  await p.evaluate(() => document.querySelectorAll('.dock .dk-dot')[3].click()); await sleep(80);
   ok(await cap() === '4/5', 'a dot jumps to its step');
-  await sceneBtn('Back'); await sleep(80);
+  await click('#dk-back'); await sleep(80);
   ok(await cap() === '3/5', 'Back goes one step back');
-  await sceneBtn('Reset'); await sleep(80);
+  await p.keyboard.press('ArrowRight'); await sleep(80);
+  ok(await cap() === '4/5', 'the right arrow key steps forward');
+  await click('#dk-reset'); await sleep(80);
   ok(await cap() === '▶', 'Reset returns to the start');
+
+  // On a topic with both tabs, the dock follows the tab, pausing what you leave.
+  await go('dns'); await sleep(150);
+  await p.evaluate(() => [...document.querySelectorAll('main .tabs button')].find((x) => x.textContent === 'Theory').click()); await sleep(80);
+  ok(await p.$eval('.dk-name', (e) => e.textContent) === 'Walkthrough', 'the Theory tab hands the dock to the walkthrough');
+  await p.evaluate(() => [...document.querySelectorAll('main .tabs button')].find((x) => x.textContent === 'Lab').click()); await sleep(80);
+  ok(await p.$eval('.dk-name', (e) => e.textContent) === 'Lab', 'the Lab tab hands it back to the lab');
   ok((await p.$$('.theory .th-duo')).length === 2 && (await p.$('.theory .th-box.talk')) && (await p.$('.quiz-more')), 'a lesson has when-to-use, trade-offs, interview notes and a second question');
   await set({ openOn: 'lab' });
 

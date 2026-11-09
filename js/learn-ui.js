@@ -215,7 +215,6 @@
       h('h3', null, 'Display'),
       row('Theme', null, ui.seg('Theme', [['system', 'Match device'], ['light', 'Light'], ['dark', 'Dark']], S.theme, (v) => set('theme', v))),
       row('Text size', null, ui.seg('Text size', [['.9', 'Small'], ['1', 'Normal'], ['1.15', 'Large'], ['1.3', 'Extra large']], String(S.zoom), (v) => set('zoom', +v))),
-      row('Animation speed', 'Slower gives you time to read each step.', ui.seg('Speed', [['.25', '¼×'], ['.5', '½×'], ['1', '1×'], ['2', '2×']], String(S.speed), (v) => RT.setSpeed(+v))),
       row('Reduce motion', 'Shortens animations.', ui.toggle({ id: 'set-motion', label: 'On', checked: S.motion, onChange(v) { set('motion', v); } })),
       h('h3', null, 'Simulation assumptions'),
       h('p', { class: 'small muted' }, 'These change the Design Studio\'s model. Try your own hardware numbers, or see how a design copes when servers are half as powerful. Budgets update to match.'),
@@ -272,13 +271,13 @@
       const detail = h('div', { class: 'card part' });
       Object.entries(LAYOUT).forEach(([id, [x, y]]) => net.node(id, { x, y, label: L.PARTS[id].name, sub: '', w: 124, h: 44, onClick: () => showPart(id) }));
       LINKS.forEach(([a, b]) => { if (a !== 'app' || b !== 'users') net.link(a, b); });
-      const flow = ui.seg('Journey', Object.entries(L.FLOWS).map(([k, f]) => [k, f.name]), 'page', () => { playId++; stepI = 0; paint(); say.textContent = 'Press Play, or step through it one hop at a time.'; });
-      const say = h('div', { class: 'banner', role: 'status' }, 'Press Play to follow a request, or click any box.');
-      const count = h('span', { class: 'small muted' });
-      const play = ui.btn('Play', playAll, { kind: 'primary', id: 'map-play' }), nextB = ui.btn('Next hop', stepOne, { id: 'map-next' });
-      let stepI = 0, running = false, cur = null, playId = 0;
-      root.append(h('div', { class: 'controls' }, ui.field('Follow a journey', flow), play, nextB, count), say, h('div', { class: 'stage' }, net.svg), detail);
-      function paint() { Object.keys(LAYOUT).forEach((id) => net.state(id, id === cur ? 'on' : '')); count.textContent = `Hop ${stepI} of ${L.FLOWS[flow.value].hops.length}`; }
+      const flow = ui.seg('Journey', Object.entries(L.FLOWS).map(([k, f]) => [k, f.name]), 'page', () => { reset(); say.textContent = 'Press Play at the top, or step through it one hop at a time.'; });
+      const say = h('div', { class: 'banner', role: 'status' }, 'Press Play at the top to follow a request, or click any box.');
+      /* stepI counts the hops shown; auto is true while Play runs the whole journey. */
+      let stepI = 0, running = false, cur = null, playId = 0, auto = false;
+      root.append(h('div', { class: 'controls' }, ui.field('Follow a journey', flow)), say, h('div', { class: 'stage' }, net.svg), detail);
+      const hops = () => L.FLOWS[flow.value].hops;
+      function paint() { Object.keys(LAYOUT).forEach((id) => net.state(id, id === cur ? 'on' : '')); if (target.repaint) target.repaint(); }
       function showPart(id) {
         cur = id; const p = L.PARTS[id]; detail.textContent = ''; paint();
         detail.append(h('h2', null, p.name), h('p', { class: 'tech-text' }, p.what), h('div', { class: 'ex-grid', style: { marginTop: '8px' } },
@@ -291,15 +290,40 @@
         const f = L.FLOWS[flow.value]; if (stepI >= f.hops.length) stepI = 0;
         running = true;
         const [a, b, text] = f.hops[stepI]; stepI++;
-        say.textContent = text; say.className = 'banner';
+        say.textContent = text; say.className = 'banner'; paint();
         if (a !== b) await net.send(a, b, { color: flow.value === 'fail' ? 'bad' : b === 'users' ? 'res' : 'req', dur: 900 }); else await ctx.sleep(700);
         net.flash(b, 'hit', 500); showPart(b); running = false; paint();
       }
       async function playAll() {
         if (running) return;
-        const me = ++playId, f = L.FLOWS[flow.value]; stepI = 0;
-        for (let i = 0; i < f.hops.length; i++) { await stepOne(); await ctx.sleep(1100); if (me !== playId) return; }
+        const me = ++playId, f = L.FLOWS[flow.value];
+        if (stepI >= f.hops.length) stepI = 0;
+        auto = true; paint();
+        while (stepI < f.hops.length) { await stepOne(); await ctx.sleep(1100); if (me !== playId) return; }
+        auto = false; paint();
       }
+      /* Showing hop i means walking the request there again; the boxes it passed light up in turn. */
+      function goTo(i) { playId++; auto = false; ctx.clock.play(); stepI = Math.max(0, i); running = false; stepOne(); }
+      function reset() { playId++; auto = false; running = false; stepI = 0; cur = null; ctx.clock.play(); paint(); }
+      /* What the control dock does on this page. */
+      const target = {
+        name: 'Journey',
+        playing: () => auto && !ctx.clock.paused,
+        ended: () => stepI >= hops().length,
+        toggle() { if (auto) ctx.clock.toggle(); else playAll(); },
+        next() { if (auto) { playId++; auto = false; ctx.clock.play(); } if (!running) stepOne(); },
+        back() { goTo(stepI - 2); },
+        jump: (i) => goTo(i),
+        reset,
+        canBack: () => stepI > 1 && !running,
+        canNext: () => !running || auto,
+        steps: () => ({ n: hops().length, idx: stepI - 1 }),
+        status: () => (stepI ? `Hop ${stepI} of ${hops().length}` : `${hops().length} hops, ready`),
+        suspend() { const was = auto && !ctx.clock.paused; if (was) ctx.clock.pause(); return was; },
+        resume() { ctx.clock.play(); },
+        on(fn) { target.repaint = fn; const offC = ctx.clock.on(fn); return () => { target.repaint = null; offC(); }; },
+      };
+      ctx.useDock(target);
       detail.append(h('p', { class: 'small muted' }, 'Click a box on the map to read about it.'));
       paint();
     },

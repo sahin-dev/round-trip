@@ -28,7 +28,7 @@ const ok = (c, m) => { if (!c) { fails++; console.log('FAIL', m); } };
       await p.evaluate((i) => { location.hash = i; }, id); await sleep(90);
       const r = await p.evaluate(() => {
         const t = document.querySelector('main .theory');
-        return t && { pic: t.querySelectorAll('.flow-box').length, boxes: t.querySelectorAll('.th-box').length, secs: t.querySelectorAll('.theory-body > section:not(.th-box):not(.scene)').length, scene: t.querySelectorAll('.scene .scn-dot').length, text: t.innerText, heads: [...t.querySelectorAll('.th-box h2')].map((x) => x.textContent) };
+        return t && { pic: t.querySelectorAll('.flow-box').length, boxes: t.querySelectorAll('.th-box').length, secs: t.querySelectorAll('.theory-body > section:not(.th-box):not(.scene)').length, scene: t.querySelectorAll('.scene .scn-list li').length, text: t.innerText, heads: [...t.querySelectorAll('.th-box h2')].map((x) => x.textContent) };
       });
       ok(r, id + ' ' + lang + ' no theory');
       if (!r) continue;
