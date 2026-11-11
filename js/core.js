@@ -213,7 +213,7 @@ window.RT = (function () {
         return st;
       },
       /* Hand this page's control dock something to drive, such as a journey on the System Map. */
-      useDock(target) { if (pageDock) pageDock.attach(target); },
+      useDock(target) { ctx.dockTarget = target || null; if (pageDock) pageDock.attach(target); },
       dispose() {
         if (!alive) return;
         alive = false;
@@ -816,7 +816,7 @@ window.RT = (function () {
       settings.tab[def.id] = v; saveSettings();
       if (v === 'lab') mount();
       /* Practice tools such as the Estimator and Studio have their own controls, so the dock is for topics. */
-      D.attach(v === 'lab' ? (topic ? labTarget : null) : sceneTarget);
+      D.attach(v === 'lab' ? (topic ? labTarget : (labCtx && labCtx.dockTarget) || null) : sceneTarget);
     });
     tabs.classList.add('topic-tabs');
     pane.append(RT.renderTheory(def, () => { tabs.set('lab'); window.scrollTo(0, 0); }, ctx));

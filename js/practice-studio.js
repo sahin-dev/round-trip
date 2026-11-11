@@ -16,12 +16,14 @@
       ['first', 'Pass any brief at Launch.'], ['growth', 'Pass any brief at Growth, with 10× or more traffic.'], ['hyper', 'Pass any brief at Hyper-scale.'],
       ['chaos', 'Pass every failure test in one design.'], ['grade', 'Earn an S grade on any stage.'], ['three', 'Pass three different briefs.'], ['all', 'Pass all eight briefs.'], ['iv', 'Finish an interview session against the clock.'],
       ['load', 'Run a load test at ten times the traffic, and keep the design within its targets.'],
+      ['ops', 'Get through a live incident with grade B or better.'], ['runbook', 'Pass a live incident after using the runbook.'], ['oncall', 'Pass every live incident.'],
     ],
     notes: `<ul>
       <li>Start from the numbers. Reads, writes, storage and SLOs decide everything else.</li>
       <li>Find the bottleneck, fix that, and repeat. Adding capacity elsewhere only adds cost.</li>
       <li>Caches and replicas help reads. Only shards or a queue help writes.</li>
       <li>Keep utilisation well under 100%. A zone outage can halve your capacity overnight.</li>
+      <li>Then run a live incident. Real failures unfold over minutes: servers take time to boot, queues back up, caches warm, and retries can keep a system down.</li>
       <li>In an interview, explain each trade-off you make. The diagram alone earns little.</li>
     </ul>`,
     check: { q: 'Your database is at 140% and the review says writes are the limit. Which change helps?', options: ['Add read replicas', 'Add a cache', 'Add shards, or buffer writes through a queue', 'Add app servers'], answer: 2, why: 'Every replica applies every write, so replicas cannot raise write capacity. Sharding splits writes, and a queue smooths them.' },
@@ -58,12 +60,13 @@
 
       const pitch = h('p', { class: 'small' }), reqs = h('div', { class: 'reqs' });
       const score = h('div', { class: 'stats' }), incident = h('div', { class: 'banner bad hide', role: 'status' });
-      const panes = { review: h('div'), chaos: h('div'), traffic: h('div', { class: 'scroll' }), interview: h('div'), reference: h('div'), share: h('div'), model: h('div') };
-      const tabs = ui.tabs([['review', 'Review'], ['chaos', 'Failure tests'], ['traffic', 'Traffic by tier'], ['interview', 'Interview mode'], ['reference', 'Reference design'], ['share', 'Save & share'], ['model', say('How the numbers work', 'সংখ্যাগুলো কীভাবে আসে')]], (v) => {
+      const panes = { review: h('div'), live: h('div'), chaos: h('div'), traffic: h('div', { class: 'scroll' }), interview: h('div'), reference: h('div'), share: h('div'), model: h('div') };
+      const tabs = ui.tabs([['review', 'Review'], ['live', say('Live incident', 'লাইভ ঘটনা')], ['chaos', 'Failure tests'], ['traffic', 'Traffic by tier'], ['interview', 'Interview mode'], ['reference', 'Reference design'], ['share', 'Save & share'], ['model', say('How the numbers work', 'সংখ্যাগুলো কীভাবে আসে')]], (v) => {
         Object.entries(panes).forEach(([k, p]) => p.classList.toggle('hide', k !== v));
+        if (v === 'live') live.show(); else live.hide();
       });
       const hidden = () => mode === 'blind' && !revealed;
-      const shown = () => (test.on && test.r ? test.r : fault ? fault.r : grade.r);
+      const shown = () => live.result() || (test.on && test.r ? test.r : fault ? fault.r : grade.r);
       function persist() { save(slotKey(), design); prefs.brief = brief.id; prefs.stage = stage; save('roundtrip.studio', prefs); }
       function openSlot() { design = safe(load(slotKey(), null) || blank()); dz.reset(); mine = null; buildInterview(); buildTest(); refresh(); }
       function idle(inspector) {
@@ -92,6 +95,9 @@
       }, { id: 'lt-fit' });
       const testControls = h('div', { class: 'controls flat' }), testOut = h('div'), testNote = h('p', { class: 'small muted' });
       const testCard = ui.card(say('Load test', 'লোড টেস্ট'), h('div', { class: 'controls flat' }, testOn, testReset, testFit), testNote, testControls, testOut);
+      const live = RT.StudioLive(ctx, { design: () => design, brief: () => brief, stage: () => stage, hidden: () => hidden(), prefs, save: () => save('roundtrip.studio', prefs), mission: (id) => ctx.mission(id),
+        redraw() { if (grade) { dz.draw(); drawScore(); drawTraffic(); } } });
+      panes.live.append(live.el);
       const dz = RT.Designer(ctx, { get: () => design, set: (v) => { design = v; }, result: () => (hidden() ? null : grade ? shown() : null), last: () => (grade ? grade.r : null), refresh, persist, idle });
       root.append(
         h('div', { class: 'controls' }, briefSel, ui.field('Stage', stageSeg), ui.field('Help level', modeSeg), submitB, carry, undoB, clearB),
@@ -121,7 +127,8 @@
         score.textContent = '';
         score.classList.toggle('hide', hidden());
         const tile = (label, value, tone) => h('div', { class: 'stat ' + (tone || '') }, h('b', null, value), h('span', null, label));
-        score.append(test.on ? tile(say('Load test', 'লোড টেস্ট'), D.holds(r) ? say('Holding', 'টিকে আছে') : say('Failing', 'ব্যর্থ হচ্ছে'), D.holds(r) ? 'good' : 'bad') : tile('Grade', g.letter + ' · ' + g.score, g.passed ? 'good' : 'warn'));
+        if (live.result()) score.append(tile(say('Live incident', 'লাইভ ঘটনা'), live.clock(), live.healthy() ? 'good' : 'bad'));
+        else score.append(test.on ? tile(say('Load test', 'লোড টেস্ট'), D.holds(r) ? say('Holding', 'টিকে আছে') : say('Failing', 'ব্যর্থ হচ্ছে'), D.holds(r) ? 'good' : 'bad') : tile('Grade', g.letter + ' · ' + g.score, g.passed ? 'good' : 'warn'));
         Object.entries(r.classes).forEach(([k, c]) => {
           const lim = r.d.slo[k];
           score.append(tile(`${CLASSES[k]} p95 (target ${lim} ms)`, !c.routed ? 'No path' : c.timedOut ? say('Timing out', 'টাইমআউট হচ্ছে') : fmtMs(c.p95), !c.routed || c.p95 > lim ? 'bad' : 'good'));
@@ -319,6 +326,7 @@
       function refresh() {
         submitB.classList.toggle('hide', mode !== 'blind');
         grade = D.grade(design, brief, stage);
+        live.sync();
         if (fault) { const t = grade.tests.find((x) => x.id === fault.id); fault = t ? { id: t.id, r: t.result, name: t.name } : null; }
         incident.classList.toggle('hide', !fault);
         if (fault) incident.textContent = `Incident: ${fault.name}. The numbers and canvas show the system during this failure.`;

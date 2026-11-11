@@ -82,6 +82,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.click('#lt-reset'); await sleep(150);
   await page.click('#lt-on'); await sleep(200);
   if (!/·/.test(await firstTile())) fail('turning the test off brings the grade back: ' + await firstTile());
+  // Live incident: the dock drives it, the canvas follows it, the runbook acts, and a postmortem follows.
+  {
+    const dk = () => page.$eval('.dk-status', (e) => e.textContent);
+    if (!(await page.$eval('main .dock', (d) => d.hidden))) fail('the Studio shows no dock until something can be played');
+    await page.evaluate(() => [...document.querySelectorAll('.tabs button')].find((b) => /Live incident/.test(b.textContent)).click()); await sleep(200);
+    if (await page.$eval('.dk-name', (e) => e.textContent) !== 'Incident') fail('the Live incident tab hands the dock to the incident');
+    await page.select('#lv-scn', 'deploy'); await sleep(150);
+    for (let i = 0; i < 14; i++) { await page.click('#dk-next'); await sleep(40); }
+    if (!(await dk()).includes('minute 14 /')) fail('Next moves the incident on one minute: ' + await dk());
+    if (await firstTile() !== '19:54') fail('the score tiles follow the live minute: ' + await firstTile());
+    await page.click('#dk-play'); await sleep(1500); await page.click('#dk-play'); await sleep(100);
+    const held = await dk(); await sleep(900);
+    if (held !== await dk() || held.includes('minute 14 /')) fail('Play runs the incident and Pause holds it: ' + held);
+    if (await page.$eval('#lv-rollback', (e) => e.disabled)) fail('a rollback is offered once the release is out');
+    await page.click('#lv-rollback'); await sleep(100);
+    if (!(await page.$$eval('main .log', (l) => l.some((x) => /Roll back/.test(x.textContent))))) fail('runbook actions appear in the timeline');
+    await page.click('#lv-finish'); await sleep(300);
+    console.log('live verdict:', await page.$eval('#lv-verdict', (e) => e.textContent), '|', await dk());
+    if (!(await page.$('#lv-verdict'))) fail('a postmortem follows the shift');
+    await page.screenshot({ path: path.join(shots, 'studio-live.png'), fullPage: true });
+    await page.click('#dk-reset'); await sleep(150);
+    if (!(await dk()).includes('minute 0 /')) fail('Reset starts the incident again');
+    await page.evaluate(() => [...document.querySelectorAll('.topic-tabs button')].find((b) => b.textContent === 'Theory').click()); await sleep(150);
+    await page.evaluate(() => [...document.querySelectorAll('.topic-tabs button')].find((b) => b.textContent === 'Lab').click()); await sleep(150);
+    if (await page.$eval('.dk-name', (e) => e.textContent) !== 'Incident') fail('coming back to the Lab tab gives the dock back to the incident');
+    await page.evaluate(() => [...document.querySelectorAll('.tabs button')].find((b) => /^Review$/.test(b.textContent)).click()); await sleep(150);
+    if (!(await page.$eval('main .dock', (d) => d.hidden))) fail('leaving the Live incident tab puts the dock away');
+  }
   // Selecting a connection and then clearing the canvas must not crash.
   await page.$eval('.studio-canvas path[stroke="transparent"]', (e) => e.dispatchEvent(new MouseEvent('click', { bubbles: true }))); await sleep(120);
   await page.evaluate(() => document.querySelector('#st-clear').click()); await sleep(200);

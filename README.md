@@ -1,6 +1,6 @@
 # Round Trip
 
-An interactive course on how large web systems work. Learners follow a ten-stage roadmap through 80 topics, watch a step-by-step animated walkthrough of each one, read plain explanations, experiment in live labs, keep what they learn with spaced review, practise designs in a Studio, work through interview problems, and play Scale Quest, a ten-episode game that grows a platform from 300 users to 25 million. It runs in English and Bengali.
+An interactive course on how large web systems work. Learners follow a ten-stage roadmap through 80 topics, watch a step-by-step animated walkthrough of each one, read plain explanations, experiment in live labs, keep what they learn with spaced review, practise designs in a Studio and run them through live incidents, work through interview problems, and play Scale Quest, a ten-episode game that grows a platform from 300 users to 25 million. It runs in English and Bengali.
 
 It is a static site with no framework, no backend and no accounts. Progress stays in the visitor's browser.
 
@@ -21,7 +21,7 @@ npm run preview    # serves dist/ at http://localhost:4173 with production heade
 | Command | What it does |
 |---|---|
 | `npm run lint` | ESLint over `js/` |
-| `npm test` | Simulation engine, game logic and lab models, no browser |
+| `npm test` | Simulation engine, live incidents, game logic and lab models, no browser |
 | `npm run test:e2e` | Every page and the main journeys in Chrome |
 | `npm run test:a11y` | axe accessibility audit |
 | `npm run test:bn` | Bengali coverage; writes `tests/missing.txt` |
@@ -47,7 +47,7 @@ Live DNS calls `dns.google`, and fonts come from Google Fonts. If you remove eit
 | `js/scene.js` | The walkthrough (driven by the control dock), and the extra lesson sections (when to use, trade-offs, interview notes, where it is used, a second question) |
 | `js/lessons-1.js` … `js/lessons-8.js` | One walkthrough and the extra sections for every topic, by roadmap stage, both languages |
 | `js/lab-*.js`, `js/labs-*.js` | The labs |
-| `js/practice-*.js` | Simulation engine, briefs, Studio and its load test, Workbench, Estimator, Trainer |
+| `js/practice-*.js` | Simulation engine, briefs, Studio and its load test, live incidents (`practice-ops.js` model, `practice-live.js` panel), Workbench, Estimator, Trainer |
 | `js/game-data.js`, `js/game.js` | Scale Quest |
 | `js/models.js` | Pure models behind the newer labs, tested by `tests/models.test.js` |
 | `js/labs-bridge-*.js` | Labs for the intermediate topics |
@@ -70,7 +70,7 @@ Every animation reads time from a clock in `js/core.js` (`RT.clock`, `ctx.now()`
 
 All controls live in one place: the **control dock**, a bar pinned to the top of every topic page and the System Map. Nothing else on the site plays, pauses, steps or sets the speed: not the sidebar, the settings or the labs themselves. Settings keeps only *Reduce motion*, which is an accessibility preference.
 
-- The dock drives whatever is on screen: the walkthrough on a Theory tab, the lab on a Lab tab, the journey on the System Map. Switching tabs pauses what you left and resumes it when you return.
+- The dock drives whatever is on screen: the walkthrough on a Theory tab, the lab on a Lab tab, the journey on the System Map, the live incident in the Studio. Switching tabs pauses what you left and resumes it when you return.
 - The same buttons sit in the same places everywhere: **Back · Play/Pause · Next · Reset**, a dot per step where there are steps, and speed from ¼× to 4×. Labs only run forward, so in a lab Next moves time on a moment and Back is off.
 - Labs that can stop between messages (DNS, TCP/IP, TLS, JWT & OAuth) show a **One step at a time** switch in the dock; Next then shows each message.
 - Keys work anywhere except while typing: Space or K plays and pauses, ← → (or comma and full stop) step, R resets.

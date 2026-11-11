@@ -10,7 +10,7 @@
     "build": "node scripts/build.mjs",
     "preview": "node scripts/preview.mjs",
     "lint": "eslint js",
-    "test": "node tests/engine.test.js && node tests/game.test.js && node tests/models.test.js",
+    "test": "node tests/engine.test.js && node tests/game.test.js && node tests/models.test.js && node tests/ops.test.js",
     "test:e2e": "node tests/e2e.js",
     "test:a11y": "node tests/audit.js",
     "test:bn": "node tests/coverage.js",

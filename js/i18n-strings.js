@@ -1,5 +1,6 @@
 /* English to Bengali strings. {n} marks a value that changes at run time. */
 window.RTStrings = {
+  "Then run a live incident. Real failures unfold over minutes: servers take time to boot, queues back up, caches warm, and retries can keep a system down.": "তারপর একটি লাইভ ঘটনা চালান। আসল ব্যর্থতা মিনিটে মিনিটে ঘটে: সার্ভার চালু হতে সময় লাগে, কিউ জমে, ক্যাশ গরম হয়, আর রিট্রাই সিস্টেমকে বসিয়ে রাখতে পারে।",
   "$100 has vanished. Total is {n}. Each statement was saved on its own, with nothing tying them together.": "$১০০ উধাও। মোট {n}। প্রতিটি নির্দেশ আলাদাভাবে সংরক্ষিত হয়েছে, এদের বাঁধার কিছু ছিল না।",
   "(empty marker)": "(খালি চিহ্ন)",
   "(root)": "(রুট)",

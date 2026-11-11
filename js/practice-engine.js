@@ -168,7 +168,7 @@
     design.nodes.forEach((n) => { load[n.id] = { read: 0, write: 0, other: 0, by: {} }; });
 
     const isDown = (n) => {
-      if (f.kill === n.id) return true;
+      if (f.kill === n.id || (Array.isArray(f.down) && f.down.includes(n.id))) return true;
       if (f.killOne === n.type && (n.count || 1) < 2) return true;
       if (f.zone && !['users', 'cdn', 'blob'].includes(n.type) && regions < 2) {
         const many = (n.count || n.shards || 1) >= 2 || n.type === 'sql';
@@ -181,7 +181,22 @@
     const zoneFactor = (n) => (f.zone ? (regions < 2 ? (n.multiAZ ? .5 : 1) : (regions - 1 + zoneShare(n)) / regions) : 1) * (f.killOne === n.type && n.count > 1 ? (n.count - 1) / n.count : 1);
     /* Each region runs a full stack, so it adds capacity. Writes still reach every copy of the data, so they do not scale this way. */
     const regional = Math.max(1, regions - (f.region ? 1 : 0));
+    /* A degraded tier, such as a bad release or a slow query, does less work per second and takes longer over each request. */
+    const slowOf = (n) => (f.degrade && f.degrade[n.id]) || null;
     function capacity(n) {
+      const c = rawCapacity(n), g = slowOf(n);
+      if (!g || !(g.cap > 0) || g.cap === 1) return c;
+      const out = {};
+      Object.keys(c).forEach((k) => { out[k] = c[k] * g.cap; });
+      return out;
+    }
+    /* One key that takes a share of all reads lives on one cache node or one shard, however many there are. */
+    function hotSkew(n) {
+      if (!(f.hot > 0)) return 1;
+      const spread = n.type === 'cache' ? n.count || 1 : n.type === 'sql' ? n.shards || 1 : n.type === 'nosql' ? Math.max(1, (n.count || 1) / (n.rf || 3)) : 1;
+      return 1 + Math.min(1, f.hot) * (spread - 1);
+    }
+    function rawCapacity(n) {
       const scale = zoneFactor(n) * regional, hw = hwOf(n), elastic = n.auto ? (f.spike ? Math.min(mult, AUTO_BURST) : 1) * (d.grow || 1) : 1;
       switch (n.type) {
         case 'app': case 'worker': return { all: n.count * TYPES[n.type].cap * hw.mul * scale * elastic };
@@ -196,7 +211,8 @@
       const c = capacity(n), l = load[n.id];
       /* Every replica replays every write, and that work comes out of the room it has for reads. */
       const copies = 1 + Math.max(0, (n.replicas || 0) - (f.primary ? 1 : 0)), replay = n.type === 'sql' && copies > 1 ? (1 + (copies - 1) * (1 - Math.min(.9, l.write / c.w))) / copies : 1;
-      const util = n.type === 'sql' || n.type === 'nosql' ? l.read / (c.r * replay) + l.write / c.w : (l.read + l.write + l.other) / (c.all || Infinity);
+      const skew = hotSkew(n);
+      const util = n.type === 'sql' || n.type === 'nosql' ? (l.read * skew) / (c.r * replay) + l.write / c.w : (l.read * skew + l.write + l.other) / (c.all || Infinity);
       const down = isDown(n) || (f.primary && n.type === 'sql' && !n.replicas) || (f.zone && n.type === 'nosql' && n.rf < 2 && regions < 2);
       return { util: util || 0, ok: down ? 0 : util > 1 ? 1 / util : 1, qf: queueFactor(util, c.all === Infinity ? 0 : c.all || c.r, TYPES[n.type].lat || 1), down };
     }
@@ -211,6 +227,8 @@
       if (n.type === 'cdn') return .93;
       const full = d.maxHit * (1 - Math.exp(-3.2 * Math.min(n.memGB || 0, (n.count || 1) * CACHE_NODE_GB) / d.hotGB));
       if (f.cold) return n.coalesce ? full * .65 : 0;
+      /* A cache that is filling again after a restart: warm runs from 0 (empty) to 1 (full). */
+      if (f.warm !== undefined && f.warm < 1) { const w = Math.max(0, f.warm); return full * (n.coalesce ? .65 + .35 * w : w); }
       return full;
     }
     const memo = {};
@@ -275,11 +293,13 @@
       if (t === 'sql') lat = ((cls === 'write' ? 12 + (n.syncRep ? 10 : 0) : 6) + (n.diskType === 'hdd' ? 8 : 0)) * st.qf;
       if (t === 'nosql') lat = ((cls === 'write' ? 6 : 5) + (n.diskType === 'hdd' ? 8 : 0)) * st.qf;
       if (t === 'app' && cls === 'write' && weight > 1) lat += Math.min(400, weight * 1.5);
+      if (t !== 'users' && slowOf(n) && slowOf(n).lat > 0) lat *= slowOf(n).lat;
       const a = t === 'users' ? 1 : tierA(n);
       const end = (t === 'sql' || t === 'nosql') || (t === 'blob' && cls === 'media') || (t === 'search' && cls === 'search') || (t === 'ws' && cls === 'rt');
       if (t === 'ws' && cls === 'rt') handOn(id, out[id], rate, path);
       if (t === 'worker' && cls === 'write') handOn(id, out[id].filter((k) => !kids.includes(k) && ['cache', 'search', 'blob'].includes(byId[k].type)), rate, path);
-      if (end) return { lat, tail: lat, ok: st.ok, a, edge: 0, home: t === 'sql' && cls === 'write', steps: [[id, lat]] };
+      /* While a replica is being promoted, the SQL tier has no primary, so writes fail and reads carry on. */
+      if (end) return { lat, tail: lat, ok: f.failover && t === 'sql' && cls === 'write' ? 0 : st.ok, a, edge: 0, home: t === 'sql' && cls === 'write', steps: [[id, lat]] };
 
       const hitHere = t === 'cdn' || (t === 'cache' && cls === 'read') ? hitOf(n) : 0;
       let miss = rate * (1 - hitHere), extra = 0;
@@ -335,7 +355,7 @@
         const strongPenalty = c === 'write' && d.strong && regions > 1 ? 70 : 0;
         const kb = c === 'read' ? d.respKB : c === 'write' ? d.writeKB : 0, sending = kb ? Math.max(0, sendMs(kb, rtt) - sendMs(d.recordKB, rtt)) : 0;
         const succ = regionGone ? 0 : r.ok, net = netRtt + strongPenalty + sending, timedOut = succ < .95;
-        classes[c] = { rate: d[c], routed: true, succ, p95: timedOut ? TIMEOUT_MS : TAIL * r.tail + net, timedOut, net, path: r.steps.map(([id, ms]) => [id, ms * TAIL]), a: 1 - Math.pow(1 - r.a, regions) };
+        classes[c] = { rate: d[c], routed: true, succ, p95: timedOut ? TIMEOUT_MS : TAIL * r.tail + net, raw: TAIL * r.tail + net, timedOut, net, path: r.steps.map(([id, ms]) => [id, ms * TAIL]), a: 1 - Math.pow(1 - r.a, regions) };
       });
     } else active.forEach((c) => { classes[c] = { rate: d[c], routed: false, succ: 0, p95: 0, a: 0 }; });
 
@@ -345,6 +365,7 @@
       const st = stats(n), c = nodeCost(n, d, regions);
       cost += c;
       nodes[n.id] = { util: n.type === 'users' ? 0 : st.util, down: st.down, cost: c, load: load[n.id], cap: capacity(n) };
+      if (n.type === 'cache') nodes[n.id].hit = hitOf(n);
     });
     /* Sending data out of the cloud is billed. Data coming in is free, so writes add nothing here. */
     const transfer = classes.read && classes.read.routed ? Math.round(((d.respKB || d.recordKB) * base.read / base.peak) * SECONDS_A_MONTH / 1e9 * TRANSFER_TB * settingsNow.price) : 0;
@@ -610,6 +631,6 @@
     if (n.type === 'nosql') return `${Math.round(NOSQL.capR * hw.mul * hw.readMul).toLocaleString()} reads/s, ${Math.round(NOSQL.capW * hw.mul * hw.writeMul).toLocaleString()} writes/s`;
     return `${Math.round(base * hw.mul).toLocaleString()} requests/s`;
   }
-  const api = { hwSpeed, setAssumptions, coach, fit, normalize, hwOf, hwPrice, HW, CPU_STEPS, RAM_STEPS, DISK_STEPS, TYPES, DEFAULTS, CLASSES, CHAOS, SQL, NOSQL, WHERE, LINKS, TIMEOUT_MS, CACHE_NODE_GB, sanitize, demand, evaluate, holds, breakPoint, stopper, chaos, solve, budget, review, grade };
+  const api = { AUTO_MAX, hwSpeed, setAssumptions, coach, fit, normalize, hwOf, hwPrice, HW, CPU_STEPS, RAM_STEPS, DISK_STEPS, TYPES, DEFAULTS, CLASSES, CHAOS, SQL, NOSQL, WHERE, LINKS, TIMEOUT_MS, CACHE_NODE_GB, sanitize, demand, evaluate, holds, breakPoint, stopper, chaos, solve, budget, review, grade };
   root.RTDesign = Object.assign(root.RTDesign || {}, api);
 })(typeof window !== 'undefined' ? window : globalThis);
